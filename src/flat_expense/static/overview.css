@@ -1,0 +1,147 @@
+.chart-head-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.chart-scope {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f4f6f1;
+}
+
+.chart-scope-button {
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.chart-scope-button.active {
+  background: white;
+  color: var(--green-dark);
+  box-shadow: 0 1px 4px #16332918;
+}
+
+.chart .bar-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.chart .period-bar {
+  cursor: default;
+}
+
+.chart .period-bar:hover .actual-bar,
+.chart .period-bar:hover .planned-bar {
+  filter: brightness(.92);
+  stroke: #fff;
+  stroke-width: 1;
+}
+
+.chart .bar-separator {
+  stroke: white;
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.chart-tooltip {
+  position: fixed;
+  z-index: 50;
+  width: 230px;
+  padding: 13px 14px;
+  border: 1px solid #dbe3d8;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 12px 35px #18332a2b;
+  pointer-events: none;
+}
+
+.chart-tooltip > strong,
+.chart-tooltip > small {
+  display: block;
+}
+
+.chart-tooltip > strong {
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.chart-tooltip > small {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chart-tooltip > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 5px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chart-tooltip b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chart-tooltip .legend-dot {
+  margin-right: 5px;
+}
+
+.chart-scope-label {
+  color: var(--muted);
+}
+
+.month-divider .month-total {
+  color: #264d3d;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.month-divider .month-status {
+  color: #496456;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+
+.month-divider .month-extra {
+  color: #496456;
+  font-size: 10px;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .chart-head-tools {
+    width: 100%;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 600px) {
+  .chart-scope {
+    width: 100%;
+  }
+
+  .chart-scope-button {
+    flex: 1;
+  }
+
+  .chart-scope-label {
+    display: none;
+  }
+}

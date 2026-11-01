@@ -2,7 +2,7 @@
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const esc = (value = '') => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {categories: [], expenses: [], plans: [], loan: [], today: '', moveMonth: '2027-08', view: 'overview', ready: false, report: null, reportSequence: 0, loadSequence: 0, start: '', end: '', expensePage: 0, planPage: 0, ledgerPage: 0, expenseFilters: {search:'', category:'', month:'', deleted:false}, planFilters: {search:'', category:'', month:'', status:'', archived:false}, ledgerFilters: {search:'', category:'', month:'', type:'', inactive:false}};
+const state = {categories: [], expenses: [], plans: [], loan: [], today: '', moveMonth: '2027-08', view: 'overview', ready: false, report: null, reportSequence: 0, loadSequence: 0, chartLoanMode: 'with', start: '', end: '', expensePage: 0, planPage: 0, ledgerPage: 0, expenseFilters: {search:'', category:'', month:'', deleted:false}, planFilters: {search:'', category:'', month:'', status:'', archived:false}, ledgerFilters: {search:'', category:'', month:'', type:'', inactive:false}};
 let editing = null;
 let pendingRequest = null;
 let toastTimer;
@@ -160,35 +160,42 @@ function metrics() {
   const expenses = state.expenses.filter(e => !e.deleted);
   const plans = state.plans.filter(p => !p.archived);
   const pastLoan=state.loan.filter(row=>row.payment_date<=state.today), futureLoan=state.loan.filter(row=>row.payment_date>state.today);
-  const paid = expenses.reduce((sum,e) => sum + cents(e.amount), 0n)+pastLoan.reduce((sum,row)=>sum+cents(row.total),0n);
-  const remaining = plans.reduce((sum,p) => sum + cents(planAmount(p)), 0n)+futureLoan.reduce((sum,row)=>sum+cents(row.total),0n);
+  const paidWithoutLoan=expenses.reduce((sum,e)=>sum+cents(e.amount),0n), paidLoan=pastLoan.reduce((sum,row)=>sum+cents(row.total),0n), paid=paidWithoutLoan+paidLoan;
+  const plannedWithoutLoan=plans.reduce((sum,p)=>sum+cents(planAmount(p)),0n), plannedLoan=futureLoan.reduce((sum,row)=>sum+cents(row.total),0n), remaining=plannedWithoutLoan+plannedLoan;
   const unpriced = plans.filter(p => planAmount(p) === null).length;
   const month = state.today.slice(0,7);
-  const currentActual = expenses.filter(e => e.paid_on.startsWith(month)).reduce((s,e) => s + cents(e.amount), 0n)+pastLoan.filter(row=>row.payment_date.startsWith(month)).reduce((s,row)=>s+cents(row.total),0n);
-  const currentPlanned = plans.filter(p => p.due_month?.startsWith(month)).reduce((s,p) => s + cents(planAmount(p)), 0n)+futureLoan.filter(row=>row.payment_date.startsWith(month)).reduce((s,row)=>s+cents(row.total),0n);
+  const currentActualWithoutLoan=expenses.filter(e=>e.paid_on.startsWith(month)).reduce((s,e)=>s+cents(e.amount),0n), currentActualLoan=pastLoan.filter(row=>row.payment_date.startsWith(month)).reduce((s,row)=>s+cents(row.total),0n);
+  const currentPlannedWithoutLoan=plans.filter(p=>p.due_month?.startsWith(month)).reduce((s,p)=>s+cents(planAmount(p)),0n), currentPlannedLoan=futureLoan.filter(row=>row.payment_date.startsWith(month)).reduce((s,row)=>s+cents(row.total),0n);
+  const currentWithoutLoan=currentActualWithoutLoan+currentPlannedWithoutLoan, currentLoan=currentActualLoan+currentPlannedLoan;
   return `<div class="metrics">
-    <article class="metric featured"><span class="metric-mark" aria-hidden="true">↗</span><p class="metric-label">Уже оплачено</p><p class="metric-value">${rub(paid)}</p><p class="metric-foot">${plural(expenses.length,'платёж','платежа','платежей')} и ${plural(pastLoan.length,'взнос','взноса','взносов')} по займу</p></article>
-    <article class="metric"><span class="metric-mark" aria-hidden="true">◷</span><p class="metric-label">Осталось впереди</p><p class="metric-value">${rub(remaining)}</p><p class="metric-foot">Будущие планы и взносы по займу</p></article>
-    <article class="metric"><span class="metric-mark" aria-hidden="true">◫</span><p class="metric-label">${esc(monthLabel(month))} · факт + план</p><p class="metric-value">${rub(currentActual + currentPlanned)}</p><p class="metric-foot">Из них оплачено ${rub(currentActual)}</p></article>
+    <article class="metric featured"><span class="metric-mark" aria-hidden="true">↗</span><p class="metric-label">Факт · с займом</p><p class="metric-value">${rub(paid)}</p><p class="metric-foot">Без займа ${rub(paidWithoutLoan)} · заём ${rub(paidLoan)}</p></article>
+    <article class="metric"><span class="metric-mark" aria-hidden="true">◷</span><p class="metric-label">План · с займом</p><p class="metric-value">${rub(remaining)}</p><p class="metric-foot">Без займа ${rub(plannedWithoutLoan)} · заём ${rub(plannedLoan)}</p></article>
+    <article class="metric"><span class="metric-mark" aria-hidden="true">◫</span><p class="metric-label">${esc(monthLabel(month))} · факт + план</p><p class="metric-value">${rub(currentWithoutLoan+currentLoan)}</p><p class="metric-foot">Без займа ${rub(currentWithoutLoan)} · заём ${rub(currentLoan)}</p></article>
     <article class="metric"><span class="metric-mark" aria-hidden="true">?</span><p class="metric-label">Покупки без оценки</p><p class="metric-value">${unpriced}</p><p class="metric-foot">Пока не включены в денежные итоги</p></article>
   </div>`;
+}
+function chartMonthValues(month) {
+  if (state.chartLoanMode==='without') return {actual:month.actual_without_loan,planned:month.planned_without_loan,total:month.known_total_without_loan};
+  return {actual:month.actual,planned:month.planned_remaining,total:month.known_total};
 }
 function chartMarkup(report) {
   const months = report.months;
   const width = Math.max(720, months.length * 60 + 70), height = 245, left = 62, top = 15, bottom = 42, plot = height - top - bottom;
-  const max = Math.max(1, ...months.map(m => Number(cents(m.known_total)) / 100));
+  const max = Math.max(1, ...months.map(m => Number(cents(chartMonthValues(m).total)) / 100));
   const scale = max * 1.15;
   const step = (width - left - 18) / months.length;
-  let svg = `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Оплачено и оставшиеся расходы по месяцам. Точные суммы доступны в таблице ниже.">`;
+  const scope=state.chartLoanMode==='with'?'с займом':'без займа';
+  let svg = `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Оплачено и запланировано по месяцам ${scope}. Точные суммы доступны в таблице ниже.">`;
   for (let i = 0; i <= 3; i++) {
     const value = scale * i / 3, y = height - bottom - plot * i / 3;
     const label = value >= 1e6 ? (value / 1e6).toLocaleString('ru-RU',{maximumFractionDigits:1}) + ' млн' : value >= 1e3 ? Math.round(value / 1e3).toLocaleString('ru-RU') + ' тыс' : Math.round(value).toLocaleString('ru-RU');
     svg += `<line class="tick" x1="${left}" y1="${y}" x2="${width - 10}" y2="${y}"/><text x="${left - 12}" y="${y + 3}" text-anchor="end">${label}</text>`;
   }
   months.forEach((m,i) => {
-    const actual = Number(cents(m.actual)) / 100, planned = Number(cents(m.planned_remaining)) / 100;
+    const values=chartMonthValues(m), actual=Number(cents(values.actual))/100, planned=Number(cents(values.planned))/100;
     const bar = Math.min(32, step * .52), x = left + step * i + (step - bar) / 2, ah = plot * actual / scale, ph = plot * planned / scale;
-    svg += `<g class="period-bar"><title>${esc(monthLabel(m.month))}: оплачено ${rub(m.actual)}, запланировано ${rub(m.planned_remaining)}${m.unpriced ? ', без оценки: ' + m.unpriced : ''}</title><rect class="actual-bar" x="${x}" y="${height-bottom-ah}" width="${bar}" height="${ah}" rx="3"/><rect class="planned-bar" x="${x}" y="${height-bottom-ah-ph}" width="${bar}" height="${ph}" rx="3"/><text x="${x+bar/2}" y="${height-18}" text-anchor="middle">${esc(monthLabel(m.month).replace(' г.',''))}</text></g>`;
+    const separator=ah>0&&ph>0?`<line class="bar-separator" x1="${x}" y1="${height-bottom-ah}" x2="${x+bar}" y2="${height-bottom-ah}"/>`:'';
+    svg += `<g class="period-bar" aria-label="${esc(monthLabel(m.month))}: всего ${rub(values.total)}, оплачено ${rub(values.actual)}, запланировано ${rub(values.planned)}" data-month="${esc(m.month)}" data-actual="${esc(values.actual)}" data-planned="${esc(values.planned)}" data-total="${esc(values.total)}" data-scope="${scope}"><rect class="bar-hit" x="${x-step*.18}" y="${top}" width="${bar+step*.36}" height="${plot}"/><rect class="planned-bar" x="${x}" y="${height-bottom-ah-ph}" width="${bar}" height="${ph}" rx="3"/><rect class="actual-bar" x="${x}" y="${height-bottom-ah}" width="${bar}" height="${ah}" rx="3"/>${separator}<text x="${x+bar/2}" y="${height-18}" text-anchor="middle">${esc(monthLabel(m.month).replace(' г.',''))}</text></g>`;
   });
   return svg + '</svg>';
 }
@@ -203,13 +210,25 @@ function renderOverview() {
   if (undated.length) notices.push(`<span>${plural(undated.length,'покупка','покупки','покупок')} без месяца оплаты. Распределите их, чтобы увидеть полный прогноз.</span><button class="text-button" data-action="undated">Распределить →</button>`);
   if (overdue.length) notices.push(`<span>У ${overdue.length} планов указанный месяц уже прошёл.</span><button class="text-button" data-action="overdue">Проверить →</button>`);
   $('#view-overview').innerHTML = metrics() + notices.map(n => `<div class="notice">${n}</div>`).join('') + `
-    <article class="card"><div class="card-head"><div><h2>Расходы по месяцам</h2><p>Оплаченная часть и то, что ещё предстоит оплатить</p></div><div class="chart-tools"><label class="screen-reader" for="report-start">Начало периода</label><input type="month" id="report-start" value="${state.start}" min="2000-01" max="2100-12"><span>—</span><label class="screen-reader" for="report-end">Конец периода</label><input type="month" id="report-end" value="${state.end}" min="2000-01" max="2100-12"></div></div>
-      <div class="chart-wrap">${report ? chartMarkup(report) : '<div class="empty-small">Загружаю прогноз…</div>'}</div><div class="chart-legend"><span><i class="legend-dot"></i>Оплачено</span><span><i class="legend-dot planned"></i>Будущие расходы</span><button class="text-button" data-action="move-period">До переезда</button></div>
-      ${report ? `<details class="month-details"><summary>Точные суммы по месяцам</summary><div class="table-scroll"><table><thead><tr><th>Месяц</th><th class="num">Оплачено</th><th class="num">Запланировано</th><th class="num">Известный итог</th><th class="num">Без оценки</th></tr></thead><tbody>${report.months.map(m => `<tr><td>${esc(monthLabel(m.month))}${m.overdue_plan ? ' <span class="badge amber">Месяц прошёл</span>' : ''}</td><td class="num">${rub(m.actual)}</td><td class="num">${rub(m.planned_remaining)}</td><td class="num bold-num">${rub(m.known_total)}</td><td class="num">${m.unpriced || '—'}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
+    <article class="card"><div class="card-head"><div><h2>Расходы по месяцам</h2><p>Нижний уровень столбика — оплачено, верхний — запланировано</p></div><div class="chart-head-tools"><div class="chart-scope" role="group" aria-label="Учитывать заём в графике"><button class="chart-scope-button ${state.chartLoanMode==='with'?'active':''}" data-action="chart-loan-mode" data-mode="with" aria-pressed="${state.chartLoanMode==='with'}">С займом</button><button class="chart-scope-button ${state.chartLoanMode==='without'?'active':''}" data-action="chart-loan-mode" data-mode="without" aria-pressed="${state.chartLoanMode==='without'}">Без займа</button></div><div class="chart-tools"><label class="screen-reader" for="report-start">Начало периода</label><input type="month" id="report-start" value="${state.start}" min="2000-01" max="2100-12"><span>—</span><label class="screen-reader" for="report-end">Конец периода</label><input type="month" id="report-end" value="${state.end}" min="2000-01" max="2100-12"></div></div></div>
+      <div class="chart-wrap">${report ? chartMarkup(report)+'<div id="chart-tooltip" class="chart-tooltip hidden" role="status"></div>' : '<div class="empty-small">Загружаю прогноз…</div>'}</div><div class="chart-legend"><span><i class="legend-dot"></i>Оплачено</span><span><i class="legend-dot planned"></i>Запланировано</span><span class="chart-scope-label">График ${state.chartLoanMode==='with'?'с займом':'без займа'}</span><button class="text-button" data-action="move-period">До переезда</button></div>
+      ${report ? `<details class="month-details"><summary>Точные суммы по месяцам · с займом и без</summary><div class="table-scroll"><table><thead><tr><th>Месяц</th><th class="num">Факт без займа</th><th class="num">План без займа</th><th class="num">Факт с займом</th><th class="num">План с займом</th><th class="num">Без оценки</th></tr></thead><tbody>${report.months.map(m => `<tr><td>${esc(monthLabel(m.month))}${m.overdue_plan ? ' <span class="badge amber">Месяц прошёл</span>' : ''}</td><td class="num">${rub(m.actual_without_loan)}</td><td class="num">${rub(m.planned_without_loan)}</td><td class="num bold-num">${rub(m.actual)}</td><td class="num bold-num">${rub(m.planned_remaining)}</td><td class="num">${m.unpriced || '—'}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
     </article>
     <div class="overview-lower"><article class="card"><div class="card-head"><div><h2>Ближайшие планы</h2><p>Будущие покупки и этапы ремонта</p></div><span class="badge">${plans.length} открытых</span></div><div class="compact-list">${upcoming.length ? upcoming.map(p => `<button class="list-row list-click" data-action="edit-plan" data-id="${p.id}"><span class="list-symbol" aria-hidden="true">▤</span><span class="list-body"><strong>${esc(p.title)}</strong><small>${esc(p.category)}</small></span><span class="list-amount">${rub(planAmount(p))}<small>${esc(monthLabel(p.due_month))}</small></span></button>`).join('') : '<div class="empty-small">Пока нет открытых планов. Добавьте первую будущую покупку.</div>'}</div><div class="card-tail"><a class="text-button" href="#ledger">Все расходы и планы →</a></div></article>
     <article class="card"><div class="card-head"><div><h2>Последние оплаты</h2><p>Фактические расходы по датам платежей</p></div></div><div class="compact-list">${recent.length ? recent.map(e => `<button class="list-row list-click" data-action="edit-expense" data-id="${e.id}"><span class="list-symbol" aria-hidden="true">↗</span><span class="list-body"><strong>${esc(e.description)}</strong><small>${esc(e.category)}</small></span><span class="list-amount">${rub(e.amount)}<small>${dateLabel(e.paid_on)}</small></span></button>`).join('') : '<div class="empty-small">Здесь появятся ваши платежи. Начните с кнопки «Записать оплату».</div>'}</div><div class="card-tail"><a class="text-button" href="#ledger">Все расходы и планы →</a></div></article></div>`;
 }
+function updateChartTooltip(event) {
+  const tooltip=$('#chart-tooltip');
+  if(!tooltip)return;
+  const bar=event.target.closest?.('.period-bar');
+  if(!bar){tooltip.classList.add('hidden');return;}
+  tooltip.innerHTML=`<strong>${esc(monthLabel(bar.dataset.month))}</strong><small>${esc(bar.dataset.scope)}</small><div><span>Всего</span><b>${rub(bar.dataset.total)}</b></div><div><span><i class="legend-dot"></i>Оплачено</span><b>${rub(bar.dataset.actual)}</b></div><div><span><i class="legend-dot planned"></i>Запланировано</span><b>${rub(bar.dataset.planned)}</b></div>`;
+  tooltip.classList.remove('hidden');
+  const bounds=tooltip.getBoundingClientRect(), margin=12;
+  tooltip.style.left=Math.max(margin,Math.min(event.clientX+14,window.innerWidth-bounds.width-margin))+'px';
+  tooltip.style.top=Math.max(margin,Math.min(event.clientY+14,window.innerHeight-bounds.height-margin))+'px';
+}
+function hideChartTooltip(){ $('#chart-tooltip')?.classList.add('hidden'); }
 function pagination(kind, count, page, totalText) {
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   return `<div class="table-foot"><span>${plural(count,'запись','записи','записей')}${totalText ? ' · ' + totalText : ''}</span><div class="pagination"><button class="text-button" data-action="page" data-kind="${kind}" data-page="${page-1}" ${page===0?'disabled':''}>← Назад</button><span>${page+1} / ${pages}</span><button class="text-button" data-action="page" data-kind="${kind}" data-page="${page+1}" ${page+1>=pages?'disabled':''}>Далее →</button></div></div>`;
@@ -282,22 +301,26 @@ function ledgerMonthKey(row) { return row.date==='9999-12-31'?'':row.date.slice(
 function ledgerMonthTotals(rows) {
   const totals=new Map();
   rows.forEach(row=>{
-    const key=ledgerMonthKey(row), total=totals.get(key)||{actual:0n,planned:0n,unpriced:0};
-    if(row.kind==='expense'&&!row.item.deleted)total.actual+=cents(row.item.amount);
+    const key=ledgerMonthKey(row), total=totals.get(key)||{plan:0n,fact:0n,paid:0n,remaining:0n,unpriced:0};
+    if(row.kind==='expense'&&!row.item.deleted)total.paid+=cents(row.item.amount);
     else if(row.kind==='loan'){
-      if(row.item.payment_date<=state.today)total.actual+=cents(row.item.total);
-      else total.planned+=cents(row.item.total);
+      const amount=cents(row.item.total), paid=row.item.payment_date<=state.today;
+      total.plan+=amount;
+      if(paid){total.fact+=amount;total.paid+=amount;}
+      else total.remaining+=amount;
     }else if(row.kind==='plan'&&!row.item.archived){
+      if(row.item.expected!==null)total.plan+=cents(row.item.expected);
+      if(row.item.agreed!==null)total.fact+=cents(row.item.agreed);
       if(planAmount(row.item)===null)total.unpriced+=1;
-      else total.planned+=cents(planAmount(row.item));
+      else total.remaining+=cents(planAmount(row.item));
     }
     totals.set(key,total);
   });
   return totals;
 }
 function ledgerMonthHeader(key,total) {
-  const unpriced=total.unpriced?` · без оценки: ${total.unpriced}`:'';
-  return `<tr class="month-divider"><td colspan="11"><strong>${key?esc(monthLabel(key)):'Без даты'}</strong><span>Факт: ${rub(total.actual)} · План: ${rub(total.planned)}${unpriced}</span></td></tr>`;
+  const unpriced=total.unpriced?`${plural(total.unpriced,'позиция','позиции','позиций')} без оценки`:'';
+  return `<tr class="month-divider"><td><strong>${key?esc(monthLabel(key)):'Без даты'}</strong></td><td class="num month-total">${rub(total.plan)}</td><td class="num month-total">${rub(total.fact)}</td><td class="num month-total">${rub(total.paid)}</td><td class="num month-total">${rub(total.remaining)}</td><td class="month-status">Итого</td><td colspan="5" class="month-extra">${unpriced}</td></tr>`;
 }
 function ledgerRowMarkup(kind,item) {
   const [first]=categoryParts(item.category_id);
@@ -627,6 +650,9 @@ async function handleAction(event) {
       if(!await confirmAction('Обновить ставки?','Прошедшие периоды получат ставку ЦБ на дату платежа, будущие — последнюю известную ставку как прогноз.','Обновить'))return;
       target.disabled=true;
       try{const result=await mutation('/v1/loan/key-rates','POST',{});await loadData();notify(`Ставки обновлены: ${result.actual} фактических, ${result.forecast} прогнозных`);}finally{target.disabled=false;}
+    } else if (action==='chart-loan-mode') {
+      state.chartLoanMode=target.dataset.mode==='without'?'without':'with';
+      renderOverview();
     } else if (action==='move-period') {
       state.start=addMonths(state.today,-1);state.end=state.moveMonth>state.start?state.moveMonth:addMonths(state.start,11);
       state.report=null;renderOverview();await loadReport();
@@ -654,6 +680,8 @@ function updateFilter(event) {
   return true;
 }
 document.addEventListener('click',handleAction);
+document.addEventListener('pointermove',updateChartTooltip);
+document.addEventListener('scroll',hideChartTooltip,true);
 document.addEventListener('submit',event=>{if(event.target.id==='record-form')saveForm(event);});
 document.addEventListener('input',event=>{if(event.target.type==='search')updateFilter(event);});
 document.addEventListener('change',async event=>{

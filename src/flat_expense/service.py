@@ -441,8 +441,10 @@ def list_plans(db: Session, owner: int, offset=0, limit=10, archived=False):
 
 def summary(db: Session, owner: int, start: date, end: date):
     months = month_range(start, end)
-    actual = {m: 0 for m in months}
-    pending = {m: 0 for m in months}
+    actual_without_loan = {m: 0 for m in months}
+    planned_without_loan = {m: 0 for m in months}
+    loan_actual_by_month = {m: 0 for m in months}
+    loan_planned_by_month = {m: 0 for m in months}
     missing = {m: 0 for m in months}
     for e in db.scalars(
         select(Expense).where(
@@ -450,8 +452,8 @@ def summary(db: Session, owner: int, start: date, end: date):
         )
     ):
         m = e.paid_on.replace(day=1)
-        if m in actual:
-            actual[m] += e.amount_minor
+        if m in actual_without_loan:
+            actual_without_loan[m] += e.amount_minor
     undated, unknown_undated, undated_count = 0, 0, 0
     for p in db.scalars(select(Plan).where(Plan.owner_id == owner, Plan.archived.is_(False))):
         rest = p.agreed_minor if p.agreed_minor is not None else p.expected_minor
@@ -461,33 +463,44 @@ def summary(db: Session, owner: int, start: date, end: date):
             elif rest:
                 undated += rest
                 undated_count += 1
-        elif p.due_month in actual:
+        elif p.due_month in planned_without_loan:
             if rest is None:
                 missing[p.due_month] += 1
             else:
-                pending[p.due_month] += rest
+                planned_without_loan[p.due_month] += rest
     loan_actual, loan_planned = 0, 0
     current_day = today()
     for loan in db.scalars(select(LoanPeriod).where(LoanPeriod.owner_id == owner)):
         month = loan.payment_date.replace(day=1)
-        if month not in actual:
+        if month not in actual_without_loan:
             continue
         amount = loan_calculation(loan)[2]
         if loan.payment_date <= current_day:
-            actual[month] += amount
+            loan_actual_by_month[month] += amount
             loan_actual += amount
         else:
-            pending[month] += amount
+            loan_planned_by_month[month] += amount
             loan_planned += amount
     return {
         "months": [
             {
                 "month": m.isoformat(),
-                "actual": money(actual[m]),
-                "planned_remaining": money(pending[m]),
-                "known_total": money(actual[m] + pending[m]),
+                "actual": money(actual_without_loan[m] + loan_actual_by_month[m]),
+                "planned_remaining": money(planned_without_loan[m] + loan_planned_by_month[m]),
+                "known_total": money(
+                    actual_without_loan[m]
+                    + planned_without_loan[m]
+                    + loan_actual_by_month[m]
+                    + loan_planned_by_month[m]
+                ),
+                "actual_without_loan": money(actual_without_loan[m]),
+                "planned_without_loan": money(planned_without_loan[m]),
+                "known_total_without_loan": money(actual_without_loan[m] + planned_without_loan[m]),
+                "loan_actual": money(loan_actual_by_month[m]),
+                "loan_planned": money(loan_planned_by_month[m]),
                 "unpriced": missing[m],
-                "overdue_plan": m < today().replace(day=1) and (pending[m] > 0 or missing[m] > 0),
+                "overdue_plan": m < today().replace(day=1)
+                and (planned_without_loan[m] > 0 or missing[m] > 0),
             }
             for m in months
         ],
@@ -496,7 +509,7 @@ def summary(db: Session, owner: int, start: date, end: date):
         "undated_unpriced": unknown_undated,
         "loan_actual": money(loan_actual),
         "loan_planned": money(loan_planned),
-        "basis": "Факт по датам оплат; остаток по месяцу плана; заём по дате платежа. Пустые цены не включены в итог.",
+        "basis": "Факт по датам оплат; будущие расходы по месяцу плана; заём по дате платежа. Пустые цены не включены в итог.",
     }
 
 

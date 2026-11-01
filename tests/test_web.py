@@ -56,6 +56,7 @@ def test_root_issues_scoped_cookie_without_service_credential(browser):
     assert browser.get("/assets/app.js").status_code == 200
     assert browser.get("/assets/style.css").status_code == 200
     assert browser.get("/assets/editor.css").status_code == 200
+    assert browser.get("/assets/overview.css").status_code == 200
     assert browser.get("/assets/.env").status_code == 404
     assert browser.get("/openapi.json").status_code == 401
     assert browser.get("/internal/telegram/cursor").status_code == 401
@@ -214,3 +215,17 @@ def test_web_editor_supports_inline_categories_without_purchase_links(browser):
     assert "Создать категорию 2" in asset
     assert "Связать с покупкой" not in asset
     assert "Оплаты по этой покупке" not in asset
+
+
+def test_overview_has_loan_scope_and_hover_breakdown(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert "chart-loan-mode" in asset
+    assert "chart-tooltip" in asset
+    assert "actual_without_loan" in asset
+    assert "planned_without_loan" in asset
+    assert "month-total" in asset
+    assert "total.plan" in asset
+    assert "total.fact" in asset
+    assert "total.paid" in asset
+    assert "total.remaining" in asset

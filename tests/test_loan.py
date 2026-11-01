@@ -7,6 +7,7 @@ from flat_expense import service as s
 from flat_expense.cbr import parse_key_rates
 from flat_expense.importer import LOAN_HEADERS, import_loan_xlsx
 from flat_expense.models import LoanPeriod
+from flat_expense.schemas import ExpenseIn, PlanIn
 
 
 def loan_book(path):
@@ -115,6 +116,27 @@ def test_refresh_uses_historical_and_forecast_rates(sessions, monkeypatch):
 def test_loan_payments_are_in_monthly_expense_analysis(sessions, monkeypatch):
     monkeypatch.setattr(s, "today", lambda: date(2026, 6, 1))
     with sessions() as db, db.begin():
+        category = s.ensure_category(db, 111, "Ремонт")
+        s.add_expense(
+            db,
+            111,
+            ExpenseIn(
+                paid_on=date(2026, 5, 5),
+                amount="100.00",
+                category_id=category.id,
+                description="Работы",
+            ),
+        )
+        s.add_plan(
+            db,
+            111,
+            PlanIn(
+                title="Материалы",
+                category_id=category.id,
+                expected="200.00",
+                due_month=date(2026, 7, 1),
+            ),
+        )
         for index, payment_date in enumerate((date(2026, 5, 10), date(2026, 7, 10))):
             db.add(
                 LoanPeriod(
@@ -131,8 +153,15 @@ def test_loan_payments_are_in_monthly_expense_analysis(sessions, monkeypatch):
                 )
             )
         result = s.summary(db, 111, date(2026, 5, 1), date(2026, 7, 1))
-        assert result["months"][0]["actual"] == "10.00"
-        assert result["months"][2]["planned_remaining"] == "10.00"
+        may, _, july = result["months"]
+        assert may["actual"] == "110.00"
+        assert may["actual_without_loan"] == "100.00"
+        assert may["loan_actual"] == "10.00"
+        assert july["planned_remaining"] == "210.00"
+        assert july["planned_without_loan"] == "200.00"
+        assert july["loan_planned"] == "10.00"
+        assert may["known_total_without_loan"] == "100.00"
+        assert july["known_total_without_loan"] == "200.00"
         assert result["loan_actual"] == result["loan_planned"] == "10.00"
 
 
