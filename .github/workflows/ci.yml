@@ -35,12 +35,17 @@ jobs:
       - name: Build and smoke-test containers
         run: |
           python scripts/configure.py --telegram-user-id 123456789
-          docker compose up --build -d api
+          WEB_ENABLED=true docker compose up --build -d api
           trap 'docker compose down' EXIT
           for attempt in $(seq 1 40); do
             if curl --fail --silent http://127.0.0.1:8000/health; then break; fi
             sleep 3
           done
           curl --fail http://127.0.0.1:8000/health
+          curl --fail --silent --cookie-jar /tmp/flat-web-cookies http://127.0.0.1:8000/ --output /tmp/flat-web.html
+          grep -q 'Квартира' /tmp/flat-web.html
+          curl --fail --silent --cookie /tmp/flat-web-cookies http://127.0.0.1:8000/web/bootstrap
+          curl --fail --silent http://127.0.0.1:8000/assets/app.js --output /tmp/flat-web.js
+          test -s /tmp/flat-web.js
           bash scripts/backup.sh
           bash scripts/verify-backup.sh "$(ls -t backups/*.dump | head -n 1)"

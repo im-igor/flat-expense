@@ -7,6 +7,8 @@ x-app: &app
     DATABASE_URL: postgresql+psycopg://flat:${POSTGRES_PASSWORD:?Run scripts/configure.py}@db:5432/flat
     API_TOKEN: ${API_TOKEN:?Run scripts/configure.py}
     ALLOWED_TELEGRAM_USER_IDS: ${ALLOWED_TELEGRAM_USER_IDS:?Set allowed IDs}
+    WEB_ENABLED: ${WEB_ENABLED:-false}
+    WEB_OWNER_ID: ${WEB_OWNER_ID:-}
   init: true
   security_opt:
     - no-new-privileges:true

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,22 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_api_root: str = "https://api.telegram.org"
     api_base_url: str = "http://api:8000"
+    web_enabled: bool = False
+    web_owner_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("web_owner_id", mode="before")
+    @classmethod
+    def optional_web_owner(cls, value):
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def validate_web_owner(self):
+        if self.web_enabled:
+            if self.web_owner_id is None and len(self.allowed_ids) == 1:
+                self.web_owner_id = next(iter(self.allowed_ids))
+            if self.web_owner_id not in self.allowed_ids:
+                raise ValueError("Для веб-интерфейса выберите WEB_OWNER_ID из разрешённых ID.")
+        return self
 
     @field_validator("telegram_api_root")
     @classmethod

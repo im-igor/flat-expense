@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Квартира — расходы и планы</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">К содержимому</a>
+  <aside class="sidebar">
+    <a class="brand" href="#overview" aria-label="Квартира — обзор"><span class="brand-icon" aria-hidden="true">⌂</span><span>Квартира<span class="brand-sub">Личный учёт</span></span></a>
+    <nav aria-label="Разделы">
+      <a href="#overview" data-view="overview"><span aria-hidden="true">◫</span>Обзор</a>
+      <a href="#expenses" data-view="expenses"><span aria-hidden="true">↗</span>Оплаты</a>
+      <a href="#plans" data-view="plans"><span aria-hidden="true">▤</span>Планы покупок</a>
+      <a href="#categories" data-view="categories"><span aria-hidden="true">▦</span>Категории</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="tiny-label">НАША ЦЕЛЬ</span><strong>Переезд</strong><span>Август 2027</span><div class="small-rule"></div><p>Все расходы на квартиру.<br>От первого плана до последней оплаты.</p></div>
+  </aside>
+  <main id="main" tabindex="-1">
+    <header class="page-header">
+      <div><p class="eyebrow">РАСХОДЫ НА КВАРТИРУ</p><h1 id="page-title">Обзор</h1><p id="page-subtitle" class="muted">Понимать, сколько уже потрачено и что ещё впереди.</p></div>
+      <div class="header-actions"><button class="button secondary" data-action="new-plan">Запланировать</button><button class="button primary" data-action="new-expense"><span aria-hidden="true">＋</span> Записать оплату</button></div>
+    </header>
+    <div id="global-error" class="notice error hidden" role="alert"></div>
+    <div id="loading" class="loading" role="status"><span class="spinner"></span>Загружаю ваш учёт…</div>
+    <section id="view-overview" class="view hidden" aria-label="Обзор расходов"></section>
+    <section id="view-expenses" class="view hidden" aria-label="Оплаты"></section>
+    <section id="view-plans" class="view hidden" aria-label="Планы покупок"></section>
+    <section id="view-categories" class="view hidden" aria-label="Категории"></section>
+    <footer class="page-footer"><span>Квартира · расходы и планы</span><button class="text-button" data-action="refresh">Обновить данные</button></footer>
+  </main>
+  <dialog id="editor" aria-labelledby="editor-title"><div class="dialog-head"><div><p id="editor-eyebrow" class="eyebrow"></p><h2 id="editor-title"></h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><div id="editor-content"></div></dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-head"><h2 id="confirm-title">Подтверждение</h2></div><p id="confirm-text"></p><div class="form-actions"><button class="button secondary" id="confirm-cancel">Отмена</button><button class="button danger" id="confirm-ok">Подтвердить</button></div></dialog>
+  <div id="toast" role="status" class="toast hidden"></div>
+  <noscript><p>Для ввода расходов включите JavaScript в браузере.</p></noscript>
+</body>
+</html>

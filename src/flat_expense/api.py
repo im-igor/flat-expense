@@ -2,7 +2,7 @@ import secrets
 from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select, text
@@ -13,6 +13,7 @@ from flat_expense.conversation import process_update
 from flat_expense.db import make_sessions
 from flat_expense.models import BotCursor, Expense, Plan
 from flat_expense.schemas import CategoryIn, ExpenseEdit, ExpenseIn, PlanEdit, PlanIn, VersionIn
+from flat_expense.web import browser_actor, install_web
 
 
 def create_app(config: Settings | None = None, sessions=None):
@@ -30,7 +31,14 @@ def create_app(config: Settings | None = None, sessions=None):
         ):
             raise HTTPException(401, "Требуется авторизация.")
 
-    def actor(_: Annotated[None, Depends(authorize)], x_telegram_user_id: Annotated[int, Header()]):
+    def actor(
+        request: Request,
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(auth)],
+        x_telegram_user_id: Annotated[int | None, Header()] = None,
+    ):
+        if credentials is None:
+            return browser_actor(request, config)
+        authorize(credentials)
         if x_telegram_user_id not in config.allowed_ids:
             raise HTTPException(403, "Доступ запрещён.")
         return x_telegram_user_id
@@ -217,4 +225,5 @@ def create_app(config: Settings | None = None, sessions=None):
             record.next_update_id = max(record.next_update_id, next_update_id)
         return {"ok": True}
 
+    install_web(app, config)
     return app
