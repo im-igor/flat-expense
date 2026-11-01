@@ -125,10 +125,122 @@
   text-align: right;
 }
 
+.page-header.compact {
+  margin-bottom: 18px;
+}
+
+.page-header.compact .eyebrow {
+  margin-bottom: 5px;
+}
+
+.page-header.compact h1 {
+  font-size: 26px;
+}
+
+.page-header.compact .muted {
+  margin-top: 4px;
+}
+
+.upcoming-card {
+  width: 100%;
+}
+
+.upcoming-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.upcoming-month + .upcoming-month {
+  border-left: 1px solid var(--line);
+}
+
+.upcoming-month-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 26px;
+  background: #fafbf8;
+}
+
+.upcoming-month-head > div:last-child {
+  text-align: right;
+}
+
+.upcoming-month-head strong,
+.upcoming-month-head b,
+.upcoming-month-head small {
+  display: block;
+}
+
+.upcoming-month-head b {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.upcoming-month-head small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.budget-missing-cell {
+  background: #fff3cf !important;
+  box-shadow: inset 3px 0 #d6a44e;
+}
+
+.ledger-balance {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 3px 24px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f9f5;
+}
+
+.ledger-balance > span {
+  grid-row: 1 / 3;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ledger-balance > strong,
+.ledger-balance > small {
+  text-align: right;
+}
+
+.ledger-balance > strong {
+  font-size: 15px;
+}
+
+.ledger-balance > small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.ledger-balance.saving > strong {
+  color: #2f7356;
+}
+
+.ledger-balance.overrun > strong {
+  color: var(--red);
+}
+
 @media (max-width: 900px) {
   .chart-head-tools {
     width: 100%;
     align-items: flex-start;
+  }
+
+  .upcoming-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .upcoming-month + .upcoming-month {
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 }
 
@@ -143,5 +255,16 @@
 
   .chart-scope-label {
     display: none;
+  }
+
+  .ledger-balance {
+    display: block;
+  }
+
+  .ledger-balance > strong,
+  .ledger-balance > small {
+    display: block;
+    margin-top: 5px;
+    text-align: left;
   }
 }

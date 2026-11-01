@@ -229,3 +229,43 @@ def test_overview_has_loan_scope_and_hover_breakdown(browser):
     assert "total.fact" in asset
     assert "total.paid" in asset
     assert "total.remaining" in asset
+
+
+def test_ledger_pagination_keeps_month_groups_together(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert "function ledgerPages(rows)" in asset
+    assert "page.length+group.rows.length>PAGE_SIZE" in asset
+    assert "pages[state.ledgerPage]" in asset
+    assert "pages.length)}" in asset
+
+
+def test_ledger_has_dependent_category_filters(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert 'id="ledger-category1"' in asset
+    assert 'id="ledger-category2"' in asset
+    assert "category=f.category2||f.category1" in asset
+    assert "if(key==='category1')state.ledgerFilters.category2=''" in asset
+
+
+def test_ledger_shows_paid_values_missing_budgets_and_filtered_balance(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert "total.plan+=amount;total.fact+=amount;total.paid+=amount" in asset
+    assert "budget-missing-cell" in asset
+    assert "function ledgerBalance(rows)" in asset
+    assert "Баланс по текущим фильтрам" in asset
+    assert "План ${rub(balance.plan)} − Факт ${rub(balance.fact)}" in asset
+    assert "<th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th>" in asset
+
+
+def test_overview_focuses_on_current_and_next_month_plans(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    css = browser.get("/assets/overview.css").text
+    assert "Последние оплаты" not in asset
+    assert "Текущий незаконченный месяц" in asset
+    assert "Следующий полный месяц" in asset
+    assert "upcoming-grid" in asset and ".upcoming-grid" in css
+    assert ".page-header.compact" in css
