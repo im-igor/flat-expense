@@ -118,6 +118,31 @@ def test_archive_keeps_actuals_and_restore_returns_forecast(client, headers, cat
     assert report(client, headers)["months"][1]["planned_remaining"] == "150000.00"
 
 
+def test_delete_plan_preserves_and_unlinks_actual_payments(client, headers, category, sessions):
+    plan = make_plan(client, headers, category)
+    expense = make_expense(client, headers, category, plan_id=plan["id"])
+    response = client.request(
+        "DELETE",
+        f"/v1/plans/{plan['id']}",
+        headers={**headers, "Idempotency-Key": "delete-plan"},
+        json={"version": plan["version"]},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": plan["id"],
+        "deleted": True,
+        "unlinked_expenses": 1,
+        "linked_expenses_preserved": True,
+    }
+    assert client.get(f"/v1/plans/{plan['id']}", headers=headers).status_code == 404
+    saved = client.get(f"/v1/expenses/{expense['id']}", headers=headers).json()
+    assert saved["plan_id"] is None and saved["amount"] == "100000.00"
+    assert report(client, headers)["months"][0]["actual"] == "100000.00"
+    with sessions() as db:
+        entry = db.scalar(select(Audit).where(Audit.entity == "plan", Audit.action == "delete"))
+        assert entry.after["linked_expenses_preserved"] is True
+
+
 def test_edit_fact_recalculates_both_months(client, headers, category):
     e = make_expense(client, headers, category, amount="3731.15")
     data = {

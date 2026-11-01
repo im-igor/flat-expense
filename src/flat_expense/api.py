@@ -239,6 +239,22 @@ def create_app(config: Settings | None = None, sessions=None):
             lambda: s.update_plan(db, owner, identifier, data, data.version),
         )
 
+    @app.delete("/v1/plans/{identifier}")
+    def delete_plan(
+        identifier: str,
+        data: VersionIn,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "plan.delete", "id": identifier, **data.model_dump()},
+            lambda: s.delete_plan(db, owner, identifier, data.version),
+        )
+
     @app.post("/v1/plans/{identifier}/{action}")
     def toggle_plan(
         identifier: str,

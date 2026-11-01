@@ -10,7 +10,7 @@ from flat_expense.models import Expense, Plan
 from flat_expense.schemas import ExpenseIn, PlanIn
 
 
-def workbook(path, broken=False, closed=False):
+def workbook(path, broken=False, closed=False, code="MAT-TEST", total=10000):
     w = Workbook()
     e = w.active
     e.title = "Архив связей расходов"
@@ -26,9 +26,7 @@ def workbook(path, broken=False, closed=False):
             "Код позиции плана",
         ]
     )
-    e.append(
-        [datetime(2026, 10, 31), "3 731,15", "Ремонт", "Мтериалы", "Аванс", None, None, "MAT-TEST"]
-    )
+    e.append([datetime(2026, 10, 31), "3 731,15", "Ремонт", "Мтериалы", "Аванс", None, None, code])
     p = w.create_sheet("Архив плана")
     p.append(
         [
@@ -45,10 +43,10 @@ def workbook(path, broken=False, closed=False):
     )
     p.append(
         [
-            "MAT-TEST",
+            code,
             "Дизайн-проект и визуализация: оплачено" if closed else "Материалы",
             "Материалы",
-            10000,
+            total,
             100 if broken else 3731.15,
             6268.85,
             datetime(2026, 11, 1),
@@ -96,6 +94,18 @@ def test_import_skips_paid_aggregate_cards_but_keeps_expenses(sessions, tmp_path
         assert db.scalar(select(func.count()).select_from(Plan)) == 0
 
 
+def test_import_skips_unpriced_historical_card_but_keeps_expense(sessions, tmp_path):
+    path = tmp_path / "unpriced.xlsx"
+    workbook(path, code="MAT-WALLS", total=None)
+    with sessions() as db, db.begin():
+        result = import_xlsx(db, 111, path)
+        expense = db.scalar(select(Expense))
+        assert result["plans"] == 0
+        assert result["skipped_historical_plans"] == 1
+        assert expense is not None and expense.plan_id is None
+        assert db.scalar(select(func.count()).select_from(Plan)) == 0
+
+
 def test_remove_historical_cards_unlinks_expenses(sessions):
     with sessions() as db, db.begin():
         category = s.ensure_category(db, 111, "Ремонт")
@@ -124,6 +134,63 @@ def test_remove_historical_cards_unlinks_expenses(sessions):
         assert result["unlinked_expenses"] == 1
         assert db.get(Plan, plan["id"]) is None
         assert db.get(Expense, expense["id"]).plan_id is None
+
+
+def test_remove_historical_cards_detaches_all_facts_and_keeps_real_future_plan(sessions):
+    with sessions() as db, db.begin():
+        category = s.ensure_category(db, 111, "Ремонт")
+        historical = s.add_plan(
+            db,
+            111,
+            PlanIn(title="Материалы для перегородок", category_id=category.id),
+        )
+        future = s.add_plan(
+            db,
+            111,
+            PlanIn(
+                title="Материалы к этапу 3: штукатурка",
+                category_id=category.id,
+                expected="382231.20",
+            ),
+        )
+        first = s.add_expense(
+            db,
+            111,
+            ExpenseIn(
+                paid_on="2026-10-05",
+                amount="140626.00",
+                category_id=category.id,
+                description="Материалы для перегородок",
+                plan_id=historical["id"],
+            ),
+        )
+        second = s.add_expense(
+            db,
+            111,
+            ExpenseIn(
+                paid_on="2026-10-21",
+                amount="118565.00",
+                category_id=category.id,
+                description="Материалы для штукатурки",
+                plan_id=future["id"],
+            ),
+        )
+        s.audit(
+            db,
+            111,
+            "expense",
+            second["id"],
+            "import_source",
+            None,
+            {"row": 2},
+        )
+        result = remove_historical_plan_cards(db, 111)
+        assert result["removed_plans"] == 1
+        assert result["unlinked_expenses"] == 2
+        assert db.get(Plan, historical["id"]) is None
+        assert db.get(Plan, future["id"]) is not None
+        assert db.get(Expense, first["id"]).plan_id is None
+        assert db.get(Expense, second["id"]).plan_id is None
 
 
 def test_dry_run_does_not_store_data(sessions, tmp_path):

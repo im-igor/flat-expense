@@ -461,7 +461,7 @@ function openEditor(kind, item=null, plan=null) {
   $('#editor-content').innerHTML=`<form id="record-form" class="editor-form"><div id="form-error" class="form-error hidden" role="alert"></div><div class="form-grid">${fields}</div>
     ${kind==='plan'&&item?`<div class="linked-payments"><h3>Оплаты по этой покупке · ${payments.length}</h3>${payments.length?`<table><tbody>${payments.map(e=>`<tr><td class="date-cell">${dateLabel(e.paid_on)}</td><td>${esc(e.description)}</td><td class="num">${rub(e.amount)}</td><td><button type="button" class="text-button" data-action="linked-expense" data-id="${e.id}">Открыть</button></td></tr>`).join('')}</tbody></table>`:'<p class="muted">Оплат пока нет.</p>'}${!item.archived?`<button type="button" class="text-button" data-action="dialog-pay" data-id="${item.id}">＋ Записать оплату</button>`:''}</div>`:''}
     ${categoryRemoval}
-    <div class="form-actions">${item?.id&&kind!=='category'?`<button type="button" class="text-button danger-text delete-button" data-action="${kind==='expense'?(item.deleted?'restore-expense':'delete-expense'):(item.archived?'restore-plan':'archive-plan')}" data-id="${item.id}">${kind==='expense'?(item.deleted?'Восстановить':'Удалить'):(item.archived?'Вернуть из архива':'В архив')}</button>`:''}<button type="button" class="button secondary" data-action="close-dialog">${readOnly?'Закрыть':'Отмена'}</button>${readOnly?'':'<button type="submit" class="button primary" id="save-record">Сохранить</button>'}</div></form>`;
+    <div class="form-actions">${item?.id&&kind!=='category'?`<button type="button" class="text-button danger-text delete-button" data-action="${kind==='expense'?(item.deleted?'restore-expense':'delete-expense'):'delete-plan'}" data-id="${item.id}">${kind==='expense'?(item.deleted?'Восстановить':'Удалить'):'Удалить'}</button>`:''}<button type="button" class="button secondary" data-action="close-dialog">${readOnly?'Закрыть':'Отмена'}</button>${readOnly?'':'<button type="submit" class="button primary" id="save-record">Сохранить</button>'}</div></form>`;
   if (readOnly) $('#record-form').querySelectorAll('input,textarea,select').forEach(el=>el.disabled=true);
   if (kind==='plan'&&item&&state.expenses.some(e=>e.plan_id===item.id)) {
     $('#category1').disabled=true;$('#category2').disabled=true;
@@ -530,6 +530,21 @@ async function toggleRecord(action,id) {
     await loadData();
   } catch(error) {if($('#editor').open)showFormError(error);else showError(error);}
 }
+async function deletePlan(id) {
+  const item=state.plans.find(plan=>plan.id===id);
+  if(!item)throw new Error('План не найден. Обновите данные.');
+  const linked=state.expenses.filter(expense=>expense.plan_id===id).length;
+  const detail=linked
+    ? `${plural(linked,'связанная оплата','связанные оплаты','связанных оплат')} останутся в учёте как самостоятельные фактические расходы.`
+    : 'План будет удалён без возможности восстановления.';
+  if(!await confirmAction('Удалить план?',detail,'Удалить'))return;
+  try{
+    await mutation(`/v1/plans/${id}`,'DELETE',{version:item.version});
+    if($('#editor').open)await closeEditor(true);
+    notify(linked?'План удалён, оплаты сохранены':'План удалён');
+    await loadData();
+  }catch(error){if($('#editor').open)showFormError(error);else showError(error);}
+}
 async function removeCategory(id) {
   const item=state.categories.find(c=>c.id===id);
   if(!item)throw new Error('Категория не найдена. Обновите данные.');
@@ -589,6 +604,7 @@ async function handleAction(event) {
     else if (action==='edit-plan') openEditor('plan',planById(id));
     else if (action==='pay-plan') openEditor('expense',null,planById(id));
     else if (action==='close-dialog') await closeEditor();
+    else if (action==='delete-plan') await deletePlan(id);
     else if (['delete-expense','restore-expense','archive-plan','restore-plan'].includes(action)) await toggleRecord(action,id);
     else if (action==='dialog-pay'||action==='linked-expense') {
       if (dirtyForm()) {showFormError(new Error('Сначала сохраните изменения покупки или отмените их.'));return;}

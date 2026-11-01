@@ -7,10 +7,18 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from flat_expense import service as s
-from flat_expense.models import Category, Expense, ImportBatch, LoanImportBatch, LoanPeriod, Plan
+from flat_expense.models import (
+    Audit,
+    Category,
+    Expense,
+    ImportBatch,
+    LoanImportBatch,
+    LoanPeriod,
+    Plan,
+)
 from flat_expense.schemas import ExpenseIn, PlanIn
 
 ALIASES = {
@@ -27,6 +35,10 @@ HISTORICAL_PLAN_TITLES = (
     "Консультация и проект климата: оплачено",
     "Повторная приёмка: оплачено",
     "Этапы 1–2: потолочная шумоизоляция, подготовка, перегородки",
+    "Материалы для шумоизоляции потолка",
+    "Материалы для перегородок",
+    "Материалы для штукатурки",
+    "Инструменты и расходники",
 )
 
 
@@ -101,8 +113,12 @@ def import_xlsx(db, owner: int, path: Path):
                 if code in known_codes:
                     raise s.DomainError("В исходном плане повторяется код позиции.")
                 known_codes.add(code)
-                closed = status == "Оплачено"
-                source_paid[code] = s.minor(paid) or 0
+                # Historical payments must stay facts, not create synthetic plan cards.
+                # An unpriced row with payments has no calculable future balance, so it
+                # is imported only through its individual expense rows as well.
+                paid_minor = s.minor(paid) or 0
+                closed = status == "Оплачено" or (total is None and paid_minor > 0)
+                source_paid[code] = paid_minor
                 if closed:
                     continue
                 c = category(db, owner, *plan_categories(code, group))
@@ -194,7 +210,7 @@ def import_xlsx(db, owner: int, path: Path):
 
 
 def remove_historical_plan_cards(db, owner: int) -> dict:
-    """Delete imported paid aggregates while preserving their individual expenses."""
+    """Remove synthetic history cards and detach every imported historical payment."""
 
     items = list(
         db.scalars(
@@ -204,19 +220,27 @@ def remove_historical_plan_cards(db, owner: int) -> dict:
             )
         )
     )
-    unlinked = 0
+    imported_expense_ids = select(Audit.entity_id).where(
+        Audit.owner_id == owner,
+        Audit.entity == "expense",
+        Audit.action == "import_source",
+    )
+    historical_plan_ids = [item.id for item in items]
+    unlinked = db.execute(
+        update(Expense)
+        .where(
+            Expense.owner_id == owner,
+            Expense.plan_id.is_not(None),
+            or_(
+                Expense.plan_id.in_(historical_plan_ids),
+                Expense.id.in_(imported_expense_ids),
+            ),
+        )
+        .values(plan_id=None, version=Expense.version + 1)
+    ).rowcount
     removed = []
     for item in items:
         view = s.plan_view(db, item)
-        if view["remaining"] != "0.00":
-            raise s.DomainError(
-                f"Историческая карточка «{item.title}» больше не закрыта; очистка остановлена."
-            )
-        unlinked += db.execute(
-            update(Expense)
-            .where(Expense.owner_id == owner, Expense.plan_id == item.id)
-            .values(plan_id=None, version=Expense.version + 1)
-        ).rowcount
         removed.append(item.title)
         db.delete(item)
         s.audit(

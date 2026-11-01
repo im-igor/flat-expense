@@ -442,6 +442,30 @@ def toggle_plan(db: Session, owner: int, identifier: str, version: int, archived
     return result
 
 
+def delete_plan(db: Session, owner: int, identifier: str, version: int) -> dict:
+    """Delete a plan while preserving every linked payment as an independent expense."""
+
+    item = owned(db, Plan, owner, identifier, lock=True)
+    if item.version != version:
+        raise DomainError("План уже изменён. Откройте его заново.", 409)
+    before = plan_view(db, item)
+    unlinked = db.execute(
+        update(Expense)
+        .where(Expense.owner_id == owner, Expense.plan_id == item.id)
+        .values(plan_id=None, version=Expense.version + 1)
+    ).rowcount
+    result = {
+        "id": item.id,
+        "deleted": True,
+        "unlinked_expenses": unlinked,
+        "linked_expenses_preserved": True,
+    }
+    db.delete(item)
+    audit(db, owner, "plan", item.id, "delete", before, result)
+    db.flush()
+    return result
+
+
 def list_expenses(db: Session, owner: int, offset=0, limit=10, deleted=False):
     query = (
         select(Expense)
