@@ -18,3 +18,4 @@ secrets/
 *.log
 .coverage
 dist/
+tmp/

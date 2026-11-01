@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -9,6 +10,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
+    Numeric,
     String,
     UniqueConstraint,
 )
@@ -112,6 +115,47 @@ class BotCursor(Base):
 
 class ImportBatch(Base):
     __tablename__ = "import_batches"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner_id: Mapped[int] = mapped_column(BigInteger)
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    summary: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("owner_id", "source_sha256"),)
+
+
+class LoanPeriod(Base):
+    """One row of the loan schedule (columns A–K from the source workbook)."""
+
+    __tablename__ = "loan_periods"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    usage_month: Mapped[date] = mapped_column(Date)
+    period_index: Mapped[int] = mapped_column(Integer)
+    payment_date: Mapped[date] = mapped_column(Date)
+    key_rate: Mapped[Decimal | None] = mapped_column(Numeric(7, 4))
+    rate_kind: Mapped[str] = mapped_column(String(20), default="imported")
+    rate_effective_on: Mapped[date | None] = mapped_column(Date)
+    start_balance_minor: Mapped[int] = mapped_column(BigInteger)
+    interest_minor: Mapped[int] = mapped_column(BigInteger)
+    principal_minor: Mapped[int] = mapped_column(BigInteger)
+    payment_minor: Mapped[int] = mapped_column(BigInteger)
+    end_balance_minor: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "period_index"),
+        CheckConstraint("period_index >= 0"),
+        CheckConstraint("start_balance_minor >= 0"),
+        CheckConstraint("interest_minor >= 0"),
+        CheckConstraint("principal_minor >= 0"),
+        CheckConstraint("payment_minor >= 0"),
+        CheckConstraint("end_balance_minor >= 0"),
+        CheckConstraint("key_rate IS NULL OR (key_rate >= 0 AND key_rate <= 100)"),
+        Index("loan_owner_payment_date", "owner_id", "payment_date"),
+    )
+
+
+class LoanImportBatch(Base):
+    __tablename__ = "loan_import_batches"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     owner_id: Mapped[int] = mapped_column(BigInteger)
     source_sha256: Mapped[str] = mapped_column(String(64))

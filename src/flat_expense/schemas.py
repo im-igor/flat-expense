@@ -22,6 +22,14 @@ class CategoryIn(Input):
     parent_id: str | None = None
 
 
+class CategoryRenameIn(Input):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class CategoryReplaceIn(Input):
+    target_id: str
+
+
 class ExpenseIn(Input):
     paid_on: date
     amount: Payment
@@ -55,3 +63,8 @@ class PlanIn(Input):
 
 class PlanEdit(PlanIn):
     version: int = Field(ge=1)
+
+
+class LoanRateIn(Input):
+    key_rate: Decimal = Field(ge=0, le=100, max_digits=7, decimal_places=4)
+    effective_on: date | None = None

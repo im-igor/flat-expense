@@ -1,15 +1,17 @@
 import hashlib
 import json
 import re
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from calendar import isleap, monthrange
+from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from flat_expense.models import Audit, Category, Expense, Plan, RequestLog
+from flat_expense import cbr
+from flat_expense.models import Audit, Category, Expense, LoanPeriod, Plan, RequestLog, utcnow
 from flat_expense.schemas import ExpenseIn, PlanIn
 
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -141,12 +143,123 @@ def seed_categories(db: Session, owner: int):
 
 
 def categories(db: Session, owner: int) -> list[dict]:
+    items = list(
+        db.scalars(select(Category).where(Category.owner_id == owner).order_by(Category.name))
+    )
+    expense_counts = dict(
+        db.execute(
+            select(Expense.category_id, func.count())
+            .where(Expense.owner_id == owner)
+            .group_by(Expense.category_id)
+        ).all()
+    )
+    plan_counts = dict(
+        db.execute(
+            select(Plan.category_id, func.count())
+            .where(Plan.owner_id == owner)
+            .group_by(Plan.category_id)
+        ).all()
+    )
+    child_counts = dict(
+        db.execute(
+            select(Category.parent_id, func.count())
+            .where(Category.owner_id == owner, Category.parent_id.is_not(None))
+            .group_by(Category.parent_id)
+        ).all()
+    )
     return [
-        category_view(db, c)
-        for c in db.scalars(
-            select(Category).where(Category.owner_id == owner).order_by(Category.name)
-        )
+        {
+            **category_view(db, item),
+            "expense_count": expense_counts.get(item.id, 0),
+            "plan_count": plan_counts.get(item.id, 0),
+            "child_count": child_counts.get(item.id, 0),
+        }
+        for item in items
     ]
+
+
+def rename_category(db: Session, owner: int, identifier: str, name: str) -> dict:
+    item = owned(db, Category, owner, identifier, lock=True)
+    name = name.strip()
+    if not name or len(name) > 120:
+        raise DomainError("Название категории: от 1 до 120 символов.")
+    before = category_view(db, item)
+    if item.name == name:
+        return before
+    duplicate = db.scalar(
+        select(Category.id).where(
+            Category.owner_id == owner,
+            Category.parent_key == item.parent_key,
+            Category.name == name,
+            Category.id != item.id,
+        )
+    )
+    if duplicate:
+        raise DomainError("В этой группе уже есть категория с таким названием.", 409)
+    item.name = name
+    db.flush()
+    result = category_view(db, item)
+    audit(db, owner, "category", item.id, "rename", before, result)
+    return result
+
+
+def delete_category(db: Session, owner: int, identifier: str) -> dict:
+    item = owned(db, Category, owner, identifier, lock=True)
+    before = category_view(db, item)
+    children = db.scalar(
+        select(func.count()).select_from(Category).where(Category.parent_id == item.id)
+    )
+    expenses = db.scalar(
+        select(func.count())
+        .select_from(Expense)
+        .where(Expense.owner_id == owner, Expense.category_id == item.id)
+    )
+    plans = db.scalar(
+        select(func.count())
+        .select_from(Plan)
+        .where(Plan.owner_id == owner, Plan.category_id == item.id)
+    )
+    if children:
+        raise DomainError("Сначала удалите или объедините подкатегории этой группы.", 409)
+    if expenses or plans:
+        raise DomainError(
+            "Категория используется в оплатах или планах. Сначала замените её на другую.", 409
+        )
+    db.delete(item)
+    audit(db, owner, "category", item.id, "delete", before, {"deleted": True})
+    return {"id": identifier, "deleted": True}
+
+
+def replace_category(db: Session, owner: int, identifier: str, target_id: str) -> dict:
+    source = owned(db, Category, owner, identifier, lock=True)
+    target = owned(db, Category, owner, target_id, lock=True)
+    if source.id == target.id:
+        raise DomainError("Выберите другую категорию для замены.")
+    children = db.scalar(
+        select(func.count()).select_from(Category).where(Category.parent_id == source.id)
+    )
+    if children:
+        raise DomainError("Сначала замените или удалите подкатегории этой группы.", 409)
+    before = category_view(db, source)
+    expense_count = db.execute(
+        update(Expense)
+        .where(Expense.owner_id == owner, Expense.category_id == source.id)
+        .values(category_id=target.id, version=Expense.version + 1)
+    ).rowcount
+    plan_count = db.execute(
+        update(Plan)
+        .where(Plan.owner_id == owner, Plan.category_id == source.id)
+        .values(category_id=target.id, version=Plan.version + 1)
+    ).rowcount
+    result = {
+        "source": before,
+        "target": category_view(db, target),
+        "expenses": expense_count,
+        "plans": plan_count,
+    }
+    db.delete(source)
+    audit(db, owner, "category", source.id, "replace", before, result)
+    return result
 
 
 def expense_view(db: Session, item: Expense) -> dict:
@@ -381,6 +494,19 @@ def summary(db: Session, owner: int, start: date, end: date):
                 missing[p.due_month] += 1
             else:
                 pending[p.due_month] += rest
+    loan_actual, loan_planned = 0, 0
+    current_day = today()
+    for loan in db.scalars(select(LoanPeriod).where(LoanPeriod.owner_id == owner)):
+        month = loan.payment_date.replace(day=1)
+        if month not in actual:
+            continue
+        amount = loan_calculation(loan)[2]
+        if loan.payment_date <= current_day:
+            actual[month] += amount
+            loan_actual += amount
+        else:
+            pending[month] += amount
+            loan_planned += amount
     return {
         "months": [
             {
@@ -396,8 +522,131 @@ def summary(db: Session, owner: int, start: date, end: date):
         "undated_remaining": money(undated),
         "undated_count": undated_count,
         "undated_unpriced": unknown_undated,
-        "basis": "Факт по датам оплат; остаток по месяцу плана. Пустые цены не включены в итог.",
+        "loan_actual": money(loan_actual),
+        "loan_planned": money(loan_planned),
+        "basis": "Факт по датам оплат; остаток по месяцу плана; заём по дате платежа. Пустые цены не включены в итог.",
     }
+
+
+def loan_calculation(item: LoanPeriod) -> tuple[int, int, int]:
+    days_in_year = 366 if isleap(item.usage_month.year) else 365
+    days_in_month = monthrange(item.usage_month.year, item.usage_month.month)[1]
+    rate = Decimal(item.key_rate) if item.key_rate is not None else None
+    material = tax = Decimal(0)
+    if rate is not None:
+        balance = Decimal(item.end_balance_minor) / 100
+        material = balance * (
+            (Decimal(2) / 3 * rate / 100 - Decimal("0.03")) / days_in_year * days_in_month
+        )
+        tax = material * Decimal("0.35")
+    total = Decimal(item.payment_minor) / 100 + tax
+
+    def to_minor(value: Decimal) -> int:
+        return int((value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    return to_minor(material), to_minor(tax), to_minor(total)
+
+
+def loan_period_view(item: LoanPeriod) -> dict:
+    days_in_year = 366 if isleap(item.usage_month.year) else 365
+    days_in_month = monthrange(item.usage_month.year, item.usage_month.month)[1]
+    rate = Decimal(item.key_rate) if item.key_rate is not None else None
+    material_minor, tax_minor, total_minor = loan_calculation(item)
+    return {
+        "id": item.id,
+        "usage_month": item.usage_month.isoformat(),
+        "days_in_year": days_in_year,
+        "days_in_month": days_in_month,
+        "period_index": item.period_index,
+        "payment_date": item.payment_date.isoformat(),
+        "key_rate": f"{rate:.4f}" if rate is not None else None,
+        "rate_kind": item.rate_kind,
+        "rate_effective_on": (
+            item.rate_effective_on.isoformat() if item.rate_effective_on else None
+        ),
+        "start_balance": money(item.start_balance_minor),
+        "interest": money(item.interest_minor),
+        "principal": money(item.principal_minor),
+        "payment": money(item.payment_minor),
+        "end_balance": money(item.end_balance_minor),
+        "material_benefit": money(material_minor) if rate is not None else None,
+        "material_tax": money(tax_minor) if rate is not None else None,
+        "total": money(total_minor),
+    }
+
+
+def list_loan_periods(db: Session, owner: int) -> list[dict]:
+    query = select(LoanPeriod).where(LoanPeriod.owner_id == owner).order_by(LoanPeriod.period_index)
+    return [loan_period_view(item) for item in db.scalars(query)]
+
+
+def set_loan_rate(
+    db: Session, owner: int, identifier: str, key_rate: Decimal, effective_on: date | None
+) -> dict:
+    item = owned(db, LoanPeriod, owner, identifier, lock=True)
+    rate = Decimal(key_rate).quantize(Decimal("0.0001"))
+    if not Decimal("0") <= rate <= Decimal("100"):
+        raise DomainError("Ключевая ставка должна быть от 0 до 100%.")
+    before = loan_period_view(item)
+    item.key_rate = rate
+    item.rate_kind = "manual"
+    item.rate_effective_on = effective_on or item.payment_date
+    item.updated_at = utcnow()
+    db.flush()
+    result = loan_period_view(item)
+    audit(db, owner, "loan_period", item.id, "set_rate", before, result)
+    return result
+
+
+def refresh_loan_rates(db: Session, owner: int, fetcher=None) -> dict:
+    periods = list(
+        db.scalars(
+            select(LoanPeriod)
+            .where(LoanPeriod.owner_id == owner)
+            .order_by(LoanPeriod.period_index)
+            .with_for_update()
+        )
+    )
+    if not periods:
+        raise DomainError("Сначала импортируйте график займа.", 409)
+    current_day = today()
+    first_day = min(item.payment_date for item in periods) - timedelta(days=14)
+    fetcher = fetcher or cbr.fetch_key_rates
+    try:
+        rates = fetcher(first_day, current_day)
+    except cbr.CbrError as exc:
+        raise DomainError(str(exc), 502) from exc
+    ordered = sorted(rates.items())
+    current_options = [(day, rate) for day, rate in ordered if day <= current_day]
+    if not current_options:
+        raise DomainError("Нет ставки Банка России на текущую дату.", 502)
+    latest_day, latest_rate = current_options[-1]
+    actual = forecast = 0
+    for item in periods:
+        if item.payment_date <= current_day:
+            options = [(day, rate) for day, rate in ordered if day <= item.payment_date]
+            if not options:
+                raise DomainError(f"Нет ключевой ставки на {item.payment_date:%d.%m.%Y}.", 502)
+            effective_on, rate = options[-1]
+            item.rate_kind = "actual"
+            actual += 1
+        else:
+            effective_on, rate = latest_day, latest_rate
+            item.rate_kind = "forecast"
+            forecast += 1
+        item.key_rate = rate.quantize(Decimal("0.0001"))
+        item.rate_effective_on = effective_on
+        item.updated_at = utcnow()
+    result = {
+        "updated": len(periods),
+        "actual": actual,
+        "forecast": forecast,
+        "latest_rate": f"{latest_rate:.4f}",
+        "latest_rate_date": latest_day.isoformat(),
+        "source": cbr.SOURCE_PAGE,
+    }
+    audit(db, owner, "loan", str(owner), "refresh_rates", None, result)
+    return result
 
 
 def once(db: Session, owner: int, key: str, payload: dict, action):

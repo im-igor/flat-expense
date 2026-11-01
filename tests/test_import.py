@@ -5,7 +5,7 @@ from openpyxl import Workbook
 from sqlalchemy import func, select
 
 from flat_expense import service as s
-from flat_expense.importer import import_xlsx
+from flat_expense.importer import import_xlsx, verify_expenses_xlsx
 from flat_expense.models import Expense
 
 
@@ -91,3 +91,26 @@ def test_dry_run_does_not_store_data(sessions, tmp_path):
         db.rollback()
     with sessions() as db:
         assert db.scalar(select(func.count()).select_from(Expense)) == 0
+
+
+def test_verify_compares_every_expense_field(sessions, tmp_path):
+    path = tmp_path / "input.xlsx"
+    workbook(path)
+    with sessions() as db, db.begin():
+        import_xlsx(db, 111, path)
+        result = verify_expenses_xlsx(db, 111, path)
+        assert result == {
+            "source_rows": 1,
+            "database_rows": 1,
+            "source_total": "3731.15",
+            "database_total": "3731.15",
+            "exact_match": True,
+            "missing_rows": 0,
+            "unexpected_rows": 0,
+        }
+        expense = db.scalar(select(Expense))
+        expense.description = "Изменено"
+        db.flush()
+        result = verify_expenses_xlsx(db, 111, path)
+        assert not result["exact_match"]
+        assert result["missing_rows"] == result["unexpected_rows"] == 1

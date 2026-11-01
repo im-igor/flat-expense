@@ -5,7 +5,7 @@ from conftest import make_expense, make_plan, post, report
 from sqlalchemy import func, select
 
 from flat_expense import service as s
-from flat_expense.models import Audit, Expense
+from flat_expense.models import Audit, Category, Expense, Plan
 from flat_expense.schemas import ExpenseIn
 
 
@@ -188,6 +188,87 @@ def test_only_two_category_levels(client, headers, category):
             json={"name": "Третий уровень", "parent_id": category["id"]},
         ).status_code
         == 400
+    )
+
+
+def test_category_rename_replace_and_delete_updates_existing_records(
+    client, headers, category, sessions
+):
+    plan = make_plan(client, headers, category)
+    expense = make_expense(client, headers, category, plan_id=plan["id"])
+    renamed = client.put(
+        f"/v1/categories/{category['id']}",
+        headers={**headers, "Idempotency-Key": "rename-category"},
+        json={"name": "Монтаж"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["path"] == "Ремонт → Монтаж"
+    assert (
+        client.get(f"/v1/expenses/{expense['id']}", headers=headers)
+        .json()["category"]
+        .endswith("Монтаж")
+    )
+
+    target = client.post(
+        "/v1/categories",
+        headers=headers,
+        json={"name": "Материалы", "parent_id": category["parent_id"]},
+    ).json()
+    response = client.post(
+        f"/v1/categories/{category['id']}/replace",
+        headers={**headers, "Idempotency-Key": "replace-category"},
+        json={"target_id": target["id"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["expenses"] == 1 and response.json()["plans"] == 1
+    assert (
+        client.post(
+            f"/v1/categories/{category['id']}/replace",
+            headers={**headers, "Idempotency-Key": "replace-category"},
+            json={"target_id": target["id"]},
+        ).json()
+        == response.json()
+    )
+    with sessions() as db:
+        assert db.get(Category, category["id"]) is None
+        assert db.get(Expense, expense["id"]).category_id == target["id"]
+        assert db.get(Expense, expense["id"]).version == 2
+        assert db.get(Plan, plan["id"]).category_id == target["id"]
+        assert db.get(Plan, plan["id"]).version == 2
+
+    unused = client.post("/v1/categories", headers=headers, json={"name": "Временная"}).json()
+    deleted = client.delete(
+        f"/v1/categories/{unused['id']}",
+        headers={**headers, "Idempotency-Key": "delete-category"},
+    )
+    assert deleted.status_code == 200 and deleted.json()["deleted"] is True
+
+
+def test_category_delete_conflicts_and_tenant_isolation(client, headers, category):
+    assert (
+        client.delete(
+            f"/v1/categories/{category['parent_id']}",
+            headers={**headers, "Idempotency-Key": "delete-parent"},
+        ).status_code
+        == 409
+    )
+    make_expense(client, headers, category)
+    assert (
+        client.delete(
+            f"/v1/categories/{category['id']}",
+            headers={**headers, "Idempotency-Key": "delete-used"},
+        ).status_code
+        == 409
+    )
+    other = {**headers, "X-Telegram-User-Id": "222", "Idempotency-Key": "cross-category"}
+    other_target = client.post("/v1/categories", headers=other, json={"name": "Другая"}).json()
+    assert (
+        client.post(
+            f"/v1/categories/{category['id']}/replace",
+            headers=other,
+            json={"target_id": other_target["id"]},
+        ).status_code
+        == 404
     )
 
 

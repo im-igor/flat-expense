@@ -5,7 +5,8 @@ from pathlib import Path
 
 from flat_expense import service as s
 from flat_expense.db import make_sessions
-from flat_expense.importer import import_xlsx
+from flat_expense.importer import import_loan_xlsx, import_xlsx, verify_expenses_xlsx
+from flat_expense.planning import apply_future_plan
 
 
 def main():
@@ -15,6 +16,16 @@ def main():
     importer.add_argument("path", type=Path)
     importer.add_argument("--owner", required=True, type=int)
     importer.add_argument("--dry-run", action="store_true")
+    loan_importer = commands.add_parser("import-loan-xlsx")
+    loan_importer.add_argument("path", type=Path)
+    loan_importer.add_argument("--owner", required=True, type=int)
+    loan_importer.add_argument("--dry-run", action="store_true")
+    verifier = commands.add_parser("verify-xlsx")
+    verifier.add_argument("path", type=Path)
+    verifier.add_argument("--owner", required=True, type=int)
+    planner = commands.add_parser("reconcile-future-plan")
+    planner.add_argument("--owner", required=True, type=int)
+    planner.add_argument("--dry-run", action="store_true")
     seed = commands.add_parser("seed")
     seed.add_argument("--owner", required=True, type=int)
     args = parser.parse_args()
@@ -24,8 +35,21 @@ def main():
         raise SystemExit("Владелец не включён в ALLOWED_TELEGRAM_USER_IDS.")
     try:
         with sessions() as db:
-            if args.command == "import-xlsx":
-                result = import_xlsx(db, args.owner, args.path)
+            if args.command in ("import-xlsx", "import-loan-xlsx"):
+                function = import_xlsx if args.command == "import-xlsx" else import_loan_xlsx
+                result = function(db, args.owner, args.path)
+                if args.dry_run:
+                    db.rollback()
+                else:
+                    db.commit()
+                print(json.dumps({**result, "dry_run": args.dry_run}, ensure_ascii=False))
+            elif args.command == "verify-xlsx":
+                result = verify_expenses_xlsx(db, args.owner, args.path)
+                print(json.dumps(result, ensure_ascii=False))
+                if not result["exact_match"]:
+                    raise SystemExit(1)
+            elif args.command == "reconcile-future-plan":
+                result = apply_future_plan(db, args.owner)
                 if args.dry_run:
                     db.rollback()
                 else:

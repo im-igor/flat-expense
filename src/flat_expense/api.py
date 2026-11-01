@@ -12,7 +12,17 @@ from flat_expense.config import Settings, settings
 from flat_expense.conversation import process_update
 from flat_expense.db import make_sessions
 from flat_expense.models import BotCursor, Expense, Plan
-from flat_expense.schemas import CategoryIn, ExpenseEdit, ExpenseIn, PlanEdit, PlanIn, VersionIn
+from flat_expense.schemas import (
+    CategoryIn,
+    CategoryRenameIn,
+    CategoryReplaceIn,
+    ExpenseEdit,
+    ExpenseIn,
+    LoanRateIn,
+    PlanEdit,
+    PlanIn,
+    VersionIn,
+)
 from flat_expense.web import browser_actor, install_web
 
 
@@ -72,6 +82,53 @@ def create_app(config: Settings | None = None, sessions=None):
     @app.post("/v1/categories")
     def create_category(data: CategoryIn, owner=Depends(actor), db=Depends(session)):
         return s.category_view(db, s.ensure_category(db, owner, data.name, data.parent_id))
+
+    @app.put("/v1/categories/{identifier}")
+    def rename_category(
+        identifier: str,
+        data: CategoryRenameIn,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "category.rename", "id": identifier, **data.model_dump()},
+            lambda: s.rename_category(db, owner, identifier, data.name),
+        )
+
+    @app.delete("/v1/categories/{identifier}")
+    def delete_category(
+        identifier: str,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "category.delete", "id": identifier},
+            lambda: s.delete_category(db, owner, identifier),
+        )
+
+    @app.post("/v1/categories/{identifier}/replace")
+    def replace_category(
+        identifier: str,
+        data: CategoryReplaceIn,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "category.replace", "id": identifier, **data.model_dump()},
+            lambda: s.replace_category(db, owner, identifier, data.target_id),
+        )
 
     @app.get("/v1/expenses")
     def expenses(
@@ -204,6 +261,40 @@ def create_app(config: Settings | None = None, sessions=None):
     @app.get("/v1/summary")
     def summary(start: date, end: date, owner=Depends(actor), db=Depends(session)):
         return s.summary(db, owner, start, end)
+
+    @app.get("/v1/loan")
+    def loan(owner=Depends(actor), db=Depends(session)):
+        return s.list_loan_periods(db, owner)
+
+    @app.post("/v1/loan/key-rates")
+    def refresh_loan_rates(
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "loan.refresh_rates"},
+            lambda: s.refresh_loan_rates(db, owner),
+        )
+
+    @app.put("/v1/loan/{identifier}/rate")
+    def set_loan_rate(
+        identifier: str,
+        data: LoanRateIn,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "loan.set_rate", "id": identifier, **data.model_dump(mode="json")},
+            lambda: s.set_loan_rate(db, owner, identifier, data.key_rate, data.effective_on),
+        )
 
     @app.post("/internal/telegram/update", dependencies=[Depends(authorize)])
     def telegram(update: dict, db=Depends(session)):
