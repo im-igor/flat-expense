@@ -1,0 +1,54 @@
+name: offline bundle
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux amd64 images
+        run: |
+          docker pull --platform linux/amd64 postgres:17-bookworm
+          docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" -t flat-expense:local .
+      - name: Package and verify loading
+        run: |
+          mkdir -p dist
+          docker save flat-expense:local postgres:17-bookworm | gzip -1 > dist/flat-expense-linux-amd64.tar.gz
+          (cd dist && sha256sum flat-expense-linux-amd64.tar.gz > flat-expense-linux-amd64.tar.gz.sha256)
+          docker image rm flat-expense:local postgres:17-bookworm
+          docker load --input dist/flat-expense-linux-amd64.tar.gz
+      - name: Start without registry or build
+        run: |
+          python3 scripts/configure.py --telegram-user-id 123456789
+          docker compose up --no-build --pull never -d api
+          trap 'docker compose down' EXIT
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then break; fi
+            sleep 3
+          done
+          curl --fail http://127.0.0.1:8000/health
+          bash scripts/backup.sh
+          bash scripts/verify-backup.sh "$(ls -t backups/*.dump | head -n 1)"
+      - name: Publish verified bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="offline-${GITHUB_SHA:0:12}"
+          cat > dist/release-notes.md <<'NOTES'
+          Готовые образы PostgreSQL 17 и Flat Expense для Linux x86_64.
+          Сборка проверена загрузкой архива и запуском API без скачивания образов.
+          Пользовательских данных, настроек .env и Telegram-токенов в архиве нет.
+          После обновления репозитория запустите: bash scripts/start-offline.sh
+          Доступ к GitHub нужен только для загрузки. Работа бота требует доступа к Telegram.
+          NOTES
+          gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
+            --title "Комплект для установки $tag (Linux x86_64)" \
+            --notes-file dist/release-notes.md \
+            dist/flat-expense-linux-amd64.tar.gz dist/flat-expense-linux-amd64.tar.gz.sha256
