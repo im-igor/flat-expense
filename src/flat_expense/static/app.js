@@ -10,6 +10,26 @@ const PAGE_SIZE = 15;
 const monthFormatter = new Intl.DateTimeFormat('ru-RU', {month:'short', year:'2-digit', timeZone:'UTC'});
 const numberFormatter = new Intl.NumberFormat('ru-RU');
 
+function initSidebar() {
+  const storageKey = 'flat-expense.sidebar-collapsed';
+  const toggle = $('#sidebar-toggle');
+  const apply = collapsed => {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    const label = collapsed ? 'Развернуть меню' : 'Свернуть меню';
+    toggle.setAttribute('aria-label', label);
+    toggle.title = label;
+  };
+  let collapsed = true;
+  try { collapsed = localStorage.getItem(storageKey) !== 'false'; } catch { /* Storage may be disabled. */ }
+  apply(collapsed);
+  toggle.addEventListener('click', () => {
+    const next = !document.body.classList.contains('sidebar-collapsed');
+    apply(next);
+    try { localStorage.setItem(storageKey, String(next)); } catch { /* Keep the control usable without storage. */ }
+  });
+}
+
 function cents(value) {
   if (value === null || value === undefined || value === '') return 0n;
   const [whole, fraction = ''] = String(value).split('.');
@@ -291,11 +311,23 @@ function categorySuggestion(kind,item) {
   const suggested=scored[0]?.score>0&&scored[0].score>=(scored[1]?.score||0)+1?scored[0].child:children.length===1?children[0]:null;
   return suggested&&!recommendationDismissed(kind,item,suggested.id)?suggested:null;
 }
+const editableFieldLabels={
+  amount:'сумму оплаты',paid_on:'дату оплаты',description:'описание',note:'примечание',
+  title:'название',expected:'плановую стоимость',agreed:'фактическую цену',due_month:'месяц оплаты',
+  category1:'категорию 1',category2:'категорию 2'
+};
+function editableValue(kind,item,field,value,classes='') {
+  const text=value===null||value===undefined||value===''?'—':String(value);
+  if(item.deleted||item.archived)return `<span class="${classes}">${esc(text)}</span>`;
+  const label=editableFieldLabels[field]||'значение';
+  return `<button type="button" class="inline-edit ${classes}" data-action="edit-${kind}" data-id="${item.id}" data-field="${field}" aria-label="Изменить ${label}: ${esc(text)}" title="Нажмите, чтобы изменить">${esc(text)}</button>`;
+}
 function categoryCell(kind,item) {
   const [,second]=categoryParts(item.category_id);
-  if(second)return `<td>${esc(second)}</td>`;
+  if(second)return `<td>${editableValue(kind,item,'category2',second)}</td>`;
   const suggestion=categorySuggestion(kind,item), inactive=item.deleted||item.archived;
-  return `<td class="category-missing-cell"><span class="badge amber">Не выбрана</span>${inactive?'':suggestion?`<span class="category-suggestion">Рекомендуется: <strong>${esc(suggestion.name)}</strong><span class="suggestion-actions"><button class="text-button" data-action="accept-category" data-kind="${kind}" data-id="${item.id}" data-category-id="${suggestion.id}">Принять</button><button class="text-button muted-button" data-action="dismiss-category" data-kind="${kind}" data-id="${item.id}" data-category-id="${suggestion.id}">Отклонить</button></span></span>`:`<button class="text-button category-manual" data-action="edit-${kind}" data-id="${item.id}">Назначить вручную</button>`}</td>`;
+  const missing=inactive?'<span class="badge amber">Не выбрана</span>':`<button type="button" class="inline-edit inline-edit-badge badge amber" data-action="edit-${kind}" data-id="${item.id}" data-field="category2" aria-label="Выбрать категорию 2" title="Нажмите, чтобы выбрать">Не выбрана</button>`;
+  return `<td class="category-missing-cell">${missing}${inactive?'':suggestion?`<span class="category-suggestion">Рекомендуется: <strong>${esc(suggestion.name)}</strong><span class="suggestion-actions"><button class="text-button" data-action="accept-category" data-kind="${kind}" data-id="${item.id}" data-category-id="${suggestion.id}">Принять</button><button class="text-button muted-button" data-action="dismiss-category" data-kind="${kind}" data-id="${item.id}" data-category-id="${suggestion.id}">Отклонить</button></span></span>`:`<button class="text-button category-manual" data-action="edit-${kind}" data-id="${item.id}" data-field="category2">Назначить вручную</button>`}</td>`;
 }
 function ledgerMonthKey(row) { return row.date==='9999-12-31'?'':row.date.slice(0,7); }
 function ledgerPages(rows) {
@@ -341,14 +373,14 @@ function ledgerMonthHeader(key,total) {
 function ledgerRowMarkup(kind,item) {
   const [first]=categoryParts(item.category_id);
   if(kind==='expense'){
-    return `<tr class="${item.deleted?'inactive-row':'paid-row'}"><td class="date-cell">${dateLabel(item.paid_on)}</td><td>${esc(first)}</td>${categoryCell('expense',item)}<td><button class="text-button table-main" data-action="edit-expense" data-id="${item.id}">${esc(item.description)}</button></td><td class="num">${rub(item.amount)}</td><td class="num">${rub(item.amount)}</td><td class="num bold-num">${rub(item.amount)}</td><td class="num">${rub(0n)}</td><td>${item.deleted?'<span class="badge gray">Удалена</span>':'<span class="badge paid">Оплачено</span>'}</td><td><span class="table-note">${esc(item.note)||'—'}</span></td><td><button class="text-button" data-action="${item.deleted?'restore-expense':'edit-expense'}" data-id="${item.id}">${item.deleted?'Восстановить':'Изменить'}</button></td></tr>`;
+    return `<tr class="${item.deleted?'inactive-row':'paid-row'}"><td class="date-cell">${editableValue('expense',item,'paid_on',dateLabel(item.paid_on))}</td><td>${editableValue('expense',item,'category1',first)}</td>${categoryCell('expense',item)}<td>${editableValue('expense',item,'description',item.description,'table-main')}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num bold-num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${rub(0n)}</td><td>${item.deleted?'<span class="badge gray">Удалена</span>':'<span class="badge paid">Оплачено</span>'}</td><td>${editableValue('expense',item,'note',item.note||'—','table-note')}</td><td><button class="text-button" data-action="${item.deleted?'restore-expense':'edit-expense'}" data-id="${item.id}">${item.deleted?'Восстановить':'Изменить'}</button></td></tr>`;
   }
   if(kind==='loan'){
     const paid=item.payment_date<=state.today;
     return `<tr class="${paid?'paid-row':''}"><td class="date-cell">${dateLabel(item.payment_date)}</td><td>Заём</td><td>Взнос</td><td><span class="table-main">Взнос по займу № ${item.period_index}</span></td><td class="num">${rub(item.total)}</td><td class="num">${paid?rub(item.total):'—'}</td><td class="num bold-num">${paid?rub(item.total):rub(0n)}</td><td class="num">${paid?rub(0n):rub(item.total)}</td><td>${paid?'<span class="badge paid">Оплачено</span>':'<span class="badge plan-badge">Запланировано</span>'}</td><td><span class="table-note">Основной долг ${rub(item.principal)}, проценты ${rub(item.interest)}, налог ${item.material_tax===null?'не рассчитан':rub(item.material_tax)}</span></td><td><a class="text-button" href="#loan">График</a></td></tr>`;
   }
-  const planCell=item.expected===null?'<td class="num budget-missing-cell"><span class="badge amber">Не заложено</span></td>':`<td class="num">${rub(item.expected)}</td>`;
-  return `<tr class="${item.archived?'inactive-row':''}"><td class="date-cell">${esc(monthLabel(item.due_month))}</td><td>${esc(first)}</td>${categoryCell('plan',item)}<td><button class="text-button table-main" data-action="edit-plan" data-id="${item.id}">${esc(item.title)}</button></td>${planCell}<td class="num">${item.agreed===null?'—':rub(item.agreed)}</td><td class="num">—</td><td class="num bold-num">${planAmount(item)===null?'Не оценено':rub(planAmount(item))}</td><td>${planStatus(item)}</td><td><span class="table-note">${esc(item.note)||'—'}</span></td><td><button class="text-button" data-action="${item.archived?'restore-plan':'edit-plan'}" data-id="${item.id}">${item.archived?'Вернуть':'Изменить'}</button></td></tr>`;
+  const planCell=item.expected===null?`<td class="num budget-missing-cell">${editableValue('plan',item,'expected','Не заложено','inline-edit-warning')}</td>`:`<td class="num">${editableValue('plan',item,'expected',rub(item.expected))}</td>`;
+  return `<tr class="${item.archived?'inactive-row':''}"><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${editableValue('plan',item,'agreed',item.agreed===null?'—':rub(item.agreed))}</td><td class="num">—</td><td class="num bold-num">${planAmount(item)===null?'Не оценено':rub(planAmount(item))}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td><button class="text-button" data-action="${item.archived?'restore-plan':'edit-plan'}" data-id="${item.id}">${item.archived?'Вернуть':'Изменить'}</button></td></tr>`;
 }
 function ledgerBalance(rows) {
   let plan=0n,fact=0n,count=0;
@@ -405,7 +437,7 @@ function renderExpenses() {
   state.expensePage = Math.min(state.expensePage, Math.max(0,Math.ceil(rows.length/PAGE_SIZE)-1));
   const visible = rows.slice(state.expensePage*PAGE_SIZE,(state.expensePage+1)*PAGE_SIZE);
   $('#view-expenses').innerHTML = `<article class="card"><div class="toolbar"><label class="screen-reader" for="expense-search">Поиск оплат</label><input id="expense-search" type="search" placeholder="Найти оплату, покупку или примечание" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="expense-category">Категория оплат</label><select id="expense-category"><option value="">Все категории</option>${categoryOptions(f.category)}</select><label class="screen-reader" for="expense-month">Месяц оплат</label><input id="expense-month" type="month" value="${f.month}" aria-label="Месяц оплат"><label class="filter-label"><input type="checkbox" id="expense-deleted" ${f.deleted?'checked':''}>Удалённые</label></div>
-    ${visible.length ? `<div class="table-scroll"><table><thead><tr><th>Дата</th><th>Описание</th><th>Категория</th><th class="num">Сумма оплаты</th><th><span class="screen-reader">Действия</span></th></tr></thead><tbody>${visible.map(e => `<tr><td class="date-cell">${dateLabel(e.paid_on)}</td><td><button class="text-button table-main" data-action="edit-expense" data-id="${e.id}">${esc(e.description)}</button>${e.note ? `<span class="table-note">${esc(e.note)}</span>`:''}</td><td><span class="badge">${esc(e.category)}</span></td><td class="num bold-num">${rub(e.amount)}</td><td><div class="row-actions">${e.deleted ? `<button class="text-button" data-action="restore-expense" data-id="${e.id}">Восстановить</button>` : `<button class="text-button" data-action="edit-expense" data-id="${e.id}">Изменить</button>`}</div></td></tr>`).join('')}</tbody></table></div>` : empty(f.deleted?'Нет удалённых оплат':'Оплаты не найдены',f.search||f.month||f.category?'Попробуйте изменить условия поиска.':'Добавьте фактический платёж.',f.deleted?'':'new-expense','Записать оплату')}
+    ${visible.length ? `<div class="table-scroll"><table><thead><tr><th>Дата</th><th>Описание</th><th>Категория</th><th class="num">Сумма оплаты</th><th><span class="screen-reader">Действия</span></th></tr></thead><tbody>${visible.map(e => `<tr><td class="date-cell">${editableValue('expense',e,'paid_on',dateLabel(e.paid_on))}</td><td>${editableValue('expense',e,'description',e.description,'table-main')}${e.note ? editableValue('expense',e,'note',e.note,'table-note'):''}</td><td>${editableValue('expense',e,'category1',e.category,'badge')}</td><td class="num bold-num">${editableValue('expense',e,'amount',rub(e.amount))}</td><td><div class="row-actions">${e.deleted ? `<button class="text-button" data-action="restore-expense" data-id="${e.id}">Восстановить</button>` : `<button class="text-button" data-action="edit-expense" data-id="${e.id}">Изменить</button>`}</div></td></tr>`).join('')}</tbody></table></div>` : empty(f.deleted?'Нет удалённых оплат':'Оплаты не найдены',f.search||f.month||f.category?'Попробуйте изменить условия поиска.':'Добавьте фактический платёж.',f.deleted?'':'new-expense','Записать оплату')}
     ${pagination('expense',rows.length,state.expensePage,'сумма ' + rub(rows.reduce((s,e)=>s+cents(e.amount),0n)))}</article>`;
 }
 function planRows() {
@@ -418,7 +450,7 @@ function renderPlans() {
   const visible=rows.slice(state.planPage*PAGE_SIZE,(state.planPage+1)*PAGE_SIZE);
   const statuses=[['','Все состояния'],['priced','С оценкой'],['undated','Без месяца'],['unpriced','Без оценки'],['overdue','Месяц прошёл']];
   $('#view-plans').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="plan-search">Поиск планов</label><input id="plan-search" type="search" placeholder="Найти покупку или этап ремонта" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="plan-category">Категория планов</label><select id="plan-category"><option value="">Все категории</option>${categoryOptions(f.category)}</select><label class="screen-reader" for="plan-status">Состояние планов</label><select id="plan-status">${statuses.map(([v,l])=>`<option value="${v}" ${f.status===v?'selected':''}>${l}</option>`).join('')}</select><label class="screen-reader" for="plan-month">Месяц планов</label><input id="plan-month" type="month" value="${f.month}" aria-label="Месяц планов"><label class="filter-label"><input type="checkbox" id="plan-archived" ${f.archived?'checked':''}>Архив</label></div>
-  ${visible.length ? `<div class="table-scroll"><table><thead><tr><th>Покупка / категория</th><th>Месяц расхода</th><th class="num">План</th><th class="num">Факт · цена</th><th class="num">Будущий расход</th><th>Состояние</th><th><span class="screen-reader">Действия</span></th></tr></thead><tbody>${visible.map(p=>`<tr><td><button class="text-button table-main" data-action="edit-plan" data-id="${p.id}">${esc(p.title)}</button><span class="table-note">${esc(p.category)}</span></td><td class="date-cell">${esc(monthLabel(p.due_month))}</td><td class="num">${p.expected===null?'—':rub(p.expected)}</td><td class="num">${p.agreed===null?'—':rub(p.agreed)}</td><td class="num bold-num">${planAmount(p)===null?'Не оценено':rub(planAmount(p))}</td><td>${planStatus(p)}</td><td><div class="row-actions"><button class="text-button" data-action="${p.archived?'restore-plan':'edit-plan'}" data-id="${p.id}">${p.archived?'Вернуть':'Изменить'}</button></div></td></tr>`).join('')}</tbody></table></div>` : empty('Планы не найдены',f.search||f.category||f.status||f.month?'Попробуйте изменить условия поиска.':'Начните с покупки или этапа ремонта. Сумму и месяц можно уточнить позже.',f.archived?'':'new-plan','Добавить план')}
+  ${visible.length ? `<div class="table-scroll"><table><thead><tr><th>Покупка / категория</th><th>Месяц расхода</th><th class="num">План</th><th class="num">Факт · цена</th><th class="num">Будущий расход</th><th>Состояние</th><th><span class="screen-reader">Действия</span></th></tr></thead><tbody>${visible.map(p=>`<tr><td>${editableValue('plan',p,'title',p.title,'table-main')}${editableValue('plan',p,'category1',p.category,'table-note')}</td><td class="date-cell">${editableValue('plan',p,'due_month',monthLabel(p.due_month))}</td><td class="num">${editableValue('plan',p,'expected',p.expected===null?'—':rub(p.expected))}</td><td class="num">${editableValue('plan',p,'agreed',p.agreed===null?'—':rub(p.agreed))}</td><td class="num bold-num">${planAmount(p)===null?'Не оценено':rub(planAmount(p))}</td><td>${planStatus(p)}</td><td><div class="row-actions"><button class="text-button" data-action="${p.archived?'restore-plan':'edit-plan'}" data-id="${p.id}">${p.archived?'Вернуть':'Изменить'}</button></div></td></tr>`).join('')}</tbody></table></div>` : empty('Планы не найдены',f.search||f.category||f.status||f.month?'Попробуйте изменить условия поиска.':'Начните с покупки или этапа ремонта. Сумму и месяц можно уточнить позже.',f.archived?'':'new-plan','Добавить план')}
   ${pagination('plan',rows.length,state.planPage,'известный план ' + rub(rows.reduce((s,p)=>s+cents(planAmount(p)),0n)))}<p class="small-summary">Планы и фактические оплаты ведутся независимо. После оплаты удалите или скорректируйте соответствующий план вручную.</p></article>`;
 }
 function renderCategories() {
@@ -498,7 +530,7 @@ async function closeEditor(force=false) {
   editing=null;
   return true;
 }
-function openEditor(kind, item=null) {
+function openEditor(kind, item=null, focusField='') {
   if (!state.ready) return;
   editing={kind,item,initial:''};
   const title=kind==='expense'?(item?'Оплата':'Новая оплата'):kind==='plan'?(item?'Покупка / этап':'Новый план'):(item?.id?'Категория':'Новая категория');
@@ -531,6 +563,13 @@ function openEditor(kind, item=null) {
   if (readOnly) $('#record-form').querySelectorAll('input,textarea,select,.category-create-toggle,.inline-category button').forEach(el=>el.disabled=true);
   editing.initial=formSnapshot();
   $('#editor').showModal();
+  if(focusField&&!readOnly)requestAnimationFrame(()=>{
+    const control=document.getElementById(focusField);
+    if(!control||control.disabled)return;
+    control.focus({preventScroll:true});
+    control.scrollIntoView({block:'center'});
+    if(control instanceof HTMLInputElement&&['text','search'].includes(control.type))control.select();
+  });
 }
 function showFormError(error) {
   const box=$('#form-error');
@@ -662,8 +701,8 @@ async function handleAction(event) {
     else if (action==='remove-category') {try{await removeCategory(id);}catch(error){showFormError(error);}}
     else if (action==='accept-category') await applyCategorySuggestion(target.dataset.kind,id,target.dataset.categoryId);
     else if (action==='dismiss-category') dismissCategorySuggestion(target.dataset.kind,id,target.dataset.categoryId);
-    else if (action==='edit-expense') openEditor('expense',state.expenses.find(e=>e.id===id));
-    else if (action==='edit-plan') openEditor('plan',state.plans.find(p=>p.id===id));
+    else if (action==='edit-expense') openEditor('expense',state.expenses.find(e=>e.id===id),target.dataset.field);
+    else if (action==='edit-plan') openEditor('plan',state.plans.find(p=>p.id===id),target.dataset.field);
     else if (action==='close-dialog') await closeEditor();
     else if (action==='delete-plan') await deletePlan(id);
     else if (['delete-expense','restore-expense','archive-plan','restore-plan'].includes(action)) await toggleRecord(action,id);
@@ -740,4 +779,5 @@ async function start() {
     await loadData();
   } catch(error){$('#loading').classList.add('hidden');showError(error);}
 }
+initSidebar();
 start();

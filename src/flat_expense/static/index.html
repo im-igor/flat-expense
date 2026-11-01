@@ -10,17 +10,18 @@
   <link rel="stylesheet" href="/assets/overview.css">
   <script src="/assets/app.js" defer></script>
 </head>
-<body>
+<body class="app-shell sidebar-collapsed">
   <a class="skip" href="#main">К содержимому</a>
-  <aside class="sidebar">
-    <a class="brand" href="#overview" aria-label="Квартира — обзор"><span class="brand-icon" aria-hidden="true">⌂</span><span>Квартира<span class="brand-sub">Личный учёт</span></span></a>
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#overview" aria-label="Квартира — обзор" title="Квартира — обзор"><span class="brand-icon" aria-hidden="true">⌂</span><span class="brand-text">Квартира<span class="brand-sub">Личный учёт</span></span></a>
+    <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-controls="sidebar" aria-expanded="false" aria-label="Развернуть меню" title="Развернуть меню"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m5-11 3 3-3 3" class="sidebar-toggle-arrow"/></svg><span class="sidebar-toggle-label">Свернуть меню</span></button>
     <nav aria-label="Разделы">
-      <a href="#overview" data-view="overview"><span aria-hidden="true">◫</span>Обзор</a>
-      <a href="#ledger" data-view="ledger"><span aria-hidden="true">↗</span>Расходы и планы</a>
-      <a href="#loan" data-view="loan"><span aria-hidden="true">▤</span>Займ</a>
-      <a href="#categories" data-view="categories"><span aria-hidden="true">▦</span>Категории</a>
+      <a href="#overview" data-view="overview" aria-label="Обзор" title="Обзор"><span class="nav-icon" aria-hidden="true">◫</span><span class="nav-label">Обзор</span></a>
+      <a href="#ledger" data-view="ledger" aria-label="Расходы и планы" title="Расходы и планы"><span class="nav-icon" aria-hidden="true">↗</span><span class="nav-label">Расходы и планы</span></a>
+      <a href="#loan" data-view="loan" aria-label="Займ" title="Займ"><span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">Займ</span></a>
+      <a href="#categories" data-view="categories" aria-label="Категории" title="Категории"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-label">Категории</span></a>
     </nav>
-    <div class="sidebar-bottom"><span class="tiny-label">НАША ЦЕЛЬ</span><strong>Переезд</strong><span>Август 2027</span><div class="small-rule"></div><p>Все расходы на квартиру.<br>От первого плана до последней оплаты.</p></div>
+    <div class="sidebar-bottom"><span class="tiny-label">НАША ЦЕЛЬ</span><strong>Переезд</strong><span>Август 2027</span></div>
   </aside>
   <main id="main" tabindex="-1">
     <header class="page-header">
