@@ -9,26 +9,24 @@ from flat_expense.models import Audit, Category, Expense, Plan
 from flat_expense.schemas import ExpenseIn
 
 
-def test_advance_invoice_balance_delete_restore(client, headers, category):
-    p = make_plan(client, headers, category, agreed="280000")
-    advance = make_expense(client, headers, category, plan_id=p["id"])
+def test_expenses_and_plans_are_independent(client, headers, category):
+    make_plan(client, headers, category, agreed="280000")
+    advance = make_expense(client, headers, category)
     may, june = report(client, headers)["months"]
     assert (may["actual"], may["planned_remaining"]) == ("100000.00", "0.00")
-    assert (june["actual"], june["planned_remaining"]) == ("0.00", "180000.00")
-    make_expense(
-        client, headers, category, "balance", plan_id=p["id"], amount="180000", paid_on="2027-06-20"
-    )
+    assert (june["actual"], june["planned_remaining"]) == ("0.00", "280000.00")
+    make_expense(client, headers, category, "balance", amount="180000", paid_on="2027-06-20")
     june = report(client, headers)["months"][1]
     assert (june["actual"], june["planned_remaining"], june["known_total"]) == (
         "180000.00",
-        "0.00",
-        "180000.00",
+        "280000.00",
+        "460000.00",
     )
     removed = post(
         client, headers, f"/v1/expenses/{advance['id']}/delete", "delete", {"version": 1}
     ).json()
     may, june = report(client, headers)["months"]
-    assert may["actual"] == "0.00" and june["planned_remaining"] == "100000.00"
+    assert may["actual"] == "0.00" and june["planned_remaining"] == "280000.00"
     post(
         client,
         headers,
@@ -37,7 +35,7 @@ def test_advance_invoice_balance_delete_restore(client, headers, category):
         {"version": removed["version"]},
     )
     may, june = report(client, headers)["months"]
-    assert may["actual"] == "100000.00" and june["planned_remaining"] == "0.00"
+    assert may["actual"] == "100000.00" and june["planned_remaining"] == "280000.00"
 
 
 def test_repeated_delivery_and_conflicting_key(client, headers, category, sessions):
@@ -62,9 +60,9 @@ def test_repeated_delivery_and_conflicting_key(client, headers, category, sessio
         assert db.scalar(select(func.count()).select_from(Audit)) == 1
 
 
-def test_price_change_move_and_rename_preserve_link(client, headers, category):
+def test_price_change_and_move_do_not_change_expense(client, headers, category):
     p = make_plan(client, headers, category)
-    e = make_expense(client, headers, category, plan_id=p["id"])
+    e = make_expense(client, headers, category)
     data = {
         "title": "Межкомнатные двери",
         "category_id": category["id"],
@@ -77,10 +75,9 @@ def test_price_change_move_and_rename_preserve_link(client, headers, category):
         f"/v1/plans/{p['id']}", headers={**headers, "Idempotency-Key": "edit"}, json=data
     )
     assert response.status_code == 200
-    assert response.json()["remaining"] == "170000.00"
     assert response.json()["due_month"] == "2027-05-01"
-    assert client.get(f"/v1/expenses/{e['id']}", headers=headers).json()["plan_id"] == p["id"]
-    assert report(client, headers)["months"][0]["known_total"] == "270000.00"
+    assert client.get(f"/v1/expenses/{e['id']}", headers=headers).json()["amount"] == "100000.00"
+    assert report(client, headers)["months"][0]["known_total"] == "370000.00"
     assert (
         client.put(
             f"/v1/plans/{p['id']}", headers={**headers, "Idempotency-Key": "stale"}, json=data
@@ -89,7 +86,7 @@ def test_price_change_move_and_rename_preserve_link(client, headers, category):
     )
 
 
-def test_blank_zero_undated_and_overpayment(client, headers, category):
+def test_blank_zero_and_undated_plans(client, headers, category):
     make_plan(client, headers, category, "unknown", expected=None)
     make_plan(client, headers, category, "zero", expected="0")
     make_plan(client, headers, category, "no-date", expected="500", due_month=None)
@@ -98,15 +95,11 @@ def test_blank_zero_undated_and_overpayment(client, headers, category):
     assert result["months"][1]["unpriced"] == 1
     assert result["months"][1]["planned_remaining"] == "0.00"
     assert result["undated_remaining"] == "500.00" and result["undated_unpriced"] == 1
-    p = make_plan(client, headers, category, "over", expected="10")
-    make_expense(client, headers, category, plan_id=p["id"], amount="12.50")
-    view = client.get(f"/v1/plans/{p['id']}", headers=headers).json()
-    assert view["remaining"] == "0.00" and view["overpaid"] == "2.50"
 
 
 def test_archive_keeps_actuals_and_restore_returns_forecast(client, headers, category):
     p = make_plan(client, headers, category)
-    make_expense(client, headers, category, plan_id=p["id"])
+    make_expense(client, headers, category)
     archived = post(
         client, headers, f"/v1/plans/{p['id']}/archive", "archive", {"version": 1}
     ).json()
@@ -115,12 +108,12 @@ def test_archive_keeps_actuals_and_restore_returns_forecast(client, headers, cat
     post(
         client, headers, f"/v1/plans/{p['id']}/restore", "restore", {"version": archived["version"]}
     )
-    assert report(client, headers)["months"][1]["planned_remaining"] == "150000.00"
+    assert report(client, headers)["months"][1]["planned_remaining"] == "250000.00"
 
 
-def test_delete_plan_preserves_and_unlinks_actual_payments(client, headers, category, sessions):
+def test_delete_plan_does_not_change_actual_payments(client, headers, category, sessions):
     plan = make_plan(client, headers, category)
-    expense = make_expense(client, headers, category, plan_id=plan["id"])
+    expense = make_expense(client, headers, category)
     response = client.request(
         "DELETE",
         f"/v1/plans/{plan['id']}",
@@ -128,19 +121,14 @@ def test_delete_plan_preserves_and_unlinks_actual_payments(client, headers, cate
         json={"version": plan["version"]},
     )
     assert response.status_code == 200
-    assert response.json() == {
-        "id": plan["id"],
-        "deleted": True,
-        "unlinked_expenses": 1,
-        "linked_expenses_preserved": True,
-    }
+    assert response.json() == {"id": plan["id"], "deleted": True}
     assert client.get(f"/v1/plans/{plan['id']}", headers=headers).status_code == 404
     saved = client.get(f"/v1/expenses/{expense['id']}", headers=headers).json()
-    assert saved["plan_id"] is None and saved["amount"] == "100000.00"
+    assert saved["amount"] == "100000.00"
     assert report(client, headers)["months"][0]["actual"] == "100000.00"
     with sessions() as db:
         entry = db.scalar(select(Audit).where(Audit.entity == "plan", Audit.action == "delete"))
-        assert entry.after["linked_expenses_preserved"] is True
+        assert entry.after == {"id": plan["id"], "deleted": True}
 
 
 def test_edit_fact_recalculates_both_months(client, headers, category):
@@ -199,7 +187,6 @@ def test_authorization_and_tenant_isolation(client, headers, category):
             "paid_on": "2027-05-01",
             "category_id": category["id"],
             "description": "x",
-            "plan_id": p["id"],
         },
     )
     assert response.status_code == 404
@@ -220,7 +207,7 @@ def test_category_rename_replace_and_delete_updates_existing_records(
     client, headers, category, sessions
 ):
     plan = make_plan(client, headers, category)
-    expense = make_expense(client, headers, category, plan_id=plan["id"])
+    expense = make_expense(client, headers, category)
     renamed = client.put(
         f"/v1/categories/{category['id']}",
         headers={**headers, "Idempotency-Key": "rename-category"},

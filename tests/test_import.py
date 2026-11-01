@@ -57,7 +57,7 @@ def workbook(path, broken=False, closed=False, code="MAT-TEST", total=10000):
     w.save(path)
 
 
-def test_import_numeric_strings_linking_aliases_and_idempotence(sessions, tmp_path):
+def test_import_numeric_strings_aliases_and_idempotence(sessions, tmp_path):
     path = tmp_path / "input.xlsx"
     workbook(path)
     with sessions() as db, db.begin():
@@ -66,7 +66,7 @@ def test_import_numeric_strings_linking_aliases_and_idempotence(sessions, tmp_pa
             result["expenses"] == 1 and result["plans"] == 1 and result["actual_total"] == "3731.15"
         )
         plan = s.list_plans(db, 111)[0]
-        assert plan["paid"] == "3731.15" and plan["remaining"] == "6268.85"
+        assert plan["expected"] == "10000.00"
         assert "Черновые материалы" in s.list_expenses(db, 111)[0]["category"]
     with sessions() as db, db.begin():
         assert import_xlsx(db, 111, path)["already_imported"]
@@ -90,7 +90,7 @@ def test_import_skips_paid_aggregate_cards_but_keeps_expenses(sessions, tmp_path
         expense = db.scalar(select(Expense))
         assert result["plans"] == 0
         assert result["skipped_historical_plans"] == 1
-        assert expense is not None and expense.plan_id is None
+        assert expense is not None
         assert db.scalar(select(func.count()).select_from(Plan)) == 0
 
 
@@ -102,11 +102,11 @@ def test_import_skips_unpriced_historical_card_but_keeps_expense(sessions, tmp_p
         expense = db.scalar(select(Expense))
         assert result["plans"] == 0
         assert result["skipped_historical_plans"] == 1
-        assert expense is not None and expense.plan_id is None
+        assert expense is not None
         assert db.scalar(select(func.count()).select_from(Plan)) == 0
 
 
-def test_remove_historical_cards_unlinks_expenses(sessions):
+def test_remove_historical_cards_keeps_expenses(sessions):
     with sessions() as db, db.begin():
         category = s.ensure_category(db, 111, "Ремонт")
         plan = s.add_plan(
@@ -126,17 +126,15 @@ def test_remove_historical_cards_unlinks_expenses(sessions):
                 amount="100.00",
                 category_id=category.id,
                 description="Оплата дизайна",
-                plan_id=plan["id"],
             ),
         )
         result = remove_historical_plan_cards(db, 111)
         assert result["removed_plans"] == 1
-        assert result["unlinked_expenses"] == 1
         assert db.get(Plan, plan["id"]) is None
-        assert db.get(Expense, expense["id"]).plan_id is None
+        assert db.get(Expense, expense["id"]) is not None
 
 
-def test_remove_historical_cards_detaches_all_facts_and_keeps_real_future_plan(sessions):
+def test_remove_historical_cards_keeps_facts_and_real_future_plan(sessions):
     with sessions() as db, db.begin():
         category = s.ensure_category(db, 111, "Ремонт")
         historical = s.add_plan(
@@ -161,7 +159,6 @@ def test_remove_historical_cards_detaches_all_facts_and_keeps_real_future_plan(s
                 amount="140626.00",
                 category_id=category.id,
                 description="Материалы для перегородок",
-                plan_id=historical["id"],
             ),
         )
         second = s.add_expense(
@@ -172,7 +169,6 @@ def test_remove_historical_cards_detaches_all_facts_and_keeps_real_future_plan(s
                 amount="118565.00",
                 category_id=category.id,
                 description="Материалы для штукатурки",
-                plan_id=future["id"],
             ),
         )
         s.audit(
@@ -186,11 +182,10 @@ def test_remove_historical_cards_detaches_all_facts_and_keeps_real_future_plan(s
         )
         result = remove_historical_plan_cards(db, 111)
         assert result["removed_plans"] == 1
-        assert result["unlinked_expenses"] == 2
         assert db.get(Plan, historical["id"]) is None
         assert db.get(Plan, future["id"]) is not None
-        assert db.get(Expense, first["id"]).plan_id is None
-        assert db.get(Expense, second["id"]).plan_id is None
+        assert db.get(Expense, first["id"]) is not None
+        assert db.get(Expense, second["id"]) is not None
 
 
 def test_dry_run_does_not_store_data(sessions, tmp_path):

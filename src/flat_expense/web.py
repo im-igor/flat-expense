@@ -196,7 +196,7 @@ def install_web(app, config):
     @app.get("/assets/{name}", include_in_schema=False)
     def asset(name: str, request: Request):
         allowed_request(request, config)
-        if name not in ("app.js", "login.js", "style.css"):
+        if name not in ("app.js", "login.js", "style.css", "editor.css"):
             raise HTTPException(404)
         return FileResponse(ASSETS / name, headers=HEADERS)
 

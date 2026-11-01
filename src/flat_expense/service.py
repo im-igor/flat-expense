@@ -272,7 +272,6 @@ def expense_view(db: Session, item: Expense) -> dict:
         "category": category_view(db, category)["path"],
         "description": item.description,
         "note": item.note,
-        "plan_id": item.plan_id,
         "deleted": item.deleted,
         "version": item.version,
     }
@@ -291,29 +290,7 @@ def audit(db: Session, owner: int, entity: str, identifier: str, action: str, be
     )
 
 
-def paid_totals(db: Session, owner: int) -> dict[str, int]:
-    return dict(
-        db.execute(
-            select(Expense.plan_id, func.sum(Expense.amount_minor))
-            .where(
-                Expense.owner_id == owner, Expense.deleted.is_(False), Expense.plan_id.is_not(None)
-            )
-            .group_by(Expense.plan_id)
-        ).all()
-    )
-
-
-def plan_view(db: Session, item: Plan, paid: int | None = None) -> dict:
-    if paid is None:
-        paid = db.scalar(
-            select(func.coalesce(func.sum(Expense.amount_minor), 0)).where(
-                Expense.plan_id == item.id,
-                Expense.owner_id == item.owner_id,
-                Expense.deleted.is_(False),
-            )
-        )
-    price = item.agreed_minor if item.agreed_minor is not None else item.expected_minor
-    remaining = max(0, price - paid) if price is not None else None
+def plan_view(db: Session, item: Plan) -> dict:
     category = owned(db, Category, item.owner_id, item.category_id)
     return {
         "id": item.id,
@@ -322,9 +299,6 @@ def plan_view(db: Session, item: Plan, paid: int | None = None) -> dict:
         "category": category_view(db, category)["path"],
         "expected": money(item.expected_minor),
         "agreed": money(item.agreed_minor),
-        "paid": money(paid),
-        "remaining": money(remaining),
-        "overpaid": money(max(0, paid - price)) if price is not None else None,
         "due_month": item.due_month.isoformat() if item.due_month else None,
         "note": item.note,
         "archived": item.archived,
@@ -334,10 +308,6 @@ def plan_view(db: Session, item: Plan, paid: int | None = None) -> dict:
 
 def validate_expense(db: Session, owner: int, data: ExpenseIn):
     owned(db, Category, owner, data.category_id)
-    if data.plan_id:
-        plan = owned(db, Plan, owner, data.plan_id, lock=True)
-        if plan.archived:
-            raise DomainError("План в архиве. Сначала восстановите его.")
 
 
 def add_expense(db: Session, owner: int, data: ExpenseIn) -> dict:
@@ -349,7 +319,6 @@ def add_expense(db: Session, owner: int, data: ExpenseIn) -> dict:
         category_id=data.category_id,
         description=data.description,
         note=data.note,
-        plan_id=data.plan_id,
     )
     db.add(item)
     db.flush()
@@ -366,7 +335,7 @@ def update_expense(db: Session, owner: int, identifier: str, data: ExpenseIn, ve
         raise DomainError("Сначала восстановите удалённую запись.", 409)
     validate_expense(db, owner, data)
     before = expense_view(db, item)
-    for name in ("paid_on", "category_id", "description", "note", "plan_id"):
+    for name in ("paid_on", "category_id", "description", "note"):
         setattr(item, name, getattr(data, name))
     item.amount_minor = minor(data.amount)
     item.version += 1
@@ -412,12 +381,6 @@ def update_plan(db: Session, owner: int, identifier: str, data: PlanIn, version:
     if item.version != version:
         raise DomainError("План уже изменён. Откройте его заново.", 409)
     owned(db, Category, owner, data.category_id)
-    if item.category_id != data.category_id and db.scalar(
-        select(Expense.id).where(Expense.plan_id == item.id).limit(1)
-    ):
-        raise DomainError(
-            "У плана уже есть оплаты. Смена его категории требует переноса связанных записей."
-        )
     before = plan_view(db, item)
     item.title, item.category_id, item.note = data.title, data.category_id, data.note
     item.expected_minor, item.agreed_minor = minor(data.expected), minor(data.agreed)
@@ -443,23 +406,11 @@ def toggle_plan(db: Session, owner: int, identifier: str, version: int, archived
 
 
 def delete_plan(db: Session, owner: int, identifier: str, version: int) -> dict:
-    """Delete a plan while preserving every linked payment as an independent expense."""
-
     item = owned(db, Plan, owner, identifier, lock=True)
     if item.version != version:
         raise DomainError("План уже изменён. Откройте его заново.", 409)
     before = plan_view(db, item)
-    unlinked = db.execute(
-        update(Expense)
-        .where(Expense.owner_id == owner, Expense.plan_id == item.id)
-        .values(plan_id=None, version=Expense.version + 1)
-    ).rowcount
-    result = {
-        "id": item.id,
-        "deleted": True,
-        "unlinked_expenses": unlinked,
-        "linked_expenses_preserved": True,
-    }
+    result = {"id": item.id, "deleted": True}
     db.delete(item)
     audit(db, owner, "plan", item.id, "delete", before, result)
     db.flush()
@@ -478,7 +429,6 @@ def list_expenses(db: Session, owner: int, offset=0, limit=10, deleted=False):
 
 
 def list_plans(db: Session, owner: int, offset=0, limit=10, archived=False):
-    totals = paid_totals(db, owner)
     query = (
         select(Plan)
         .where(Plan.owner_id == owner, Plan.archived == archived)
@@ -486,7 +436,7 @@ def list_plans(db: Session, owner: int, offset=0, limit=10, archived=False):
         .offset(offset)
         .limit(limit)
     )
-    return [plan_view(db, p, totals.get(p.id, 0)) for p in db.scalars(query)]
+    return [plan_view(db, p) for p in db.scalars(query)]
 
 
 def summary(db: Session, owner: int, start: date, end: date):
@@ -502,11 +452,9 @@ def summary(db: Session, owner: int, start: date, end: date):
         m = e.paid_on.replace(day=1)
         if m in actual:
             actual[m] += e.amount_minor
-    totals = paid_totals(db, owner)
     undated, unknown_undated, undated_count = 0, 0, 0
     for p in db.scalars(select(Plan).where(Plan.owner_id == owner, Plan.archived.is_(False))):
-        price = p.agreed_minor if p.agreed_minor is not None else p.expected_minor
-        rest = max(0, price - totals.get(p.id, 0)) if price is not None else None
+        rest = p.agreed_minor if p.agreed_minor is not None else p.expected_minor
         if p.due_month is None:
             if rest is None:
                 unknown_undated += 1

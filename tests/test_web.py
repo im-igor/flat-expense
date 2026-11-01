@@ -55,6 +55,7 @@ def test_root_issues_scoped_cookie_without_service_credential(browser):
     assert browser.get("/web/bootstrap").status_code == 200
     assert browser.get("/assets/app.js").status_code == 200
     assert browser.get("/assets/style.css").status_code == 200
+    assert browser.get("/assets/editor.css").status_code == 200
     assert browser.get("/assets/.env").status_code == 404
     assert browser.get("/openapi.json").status_code == 401
     assert browser.get("/internal/telegram/cursor").status_code == 401
@@ -158,7 +159,7 @@ def test_browser_cannot_choose_another_owner_or_use_telegram_internal(browser):
     )
 
 
-def test_browser_purchase_advance_and_repeat_do_not_double_count(browser):
+def test_browser_plan_and_payment_are_independent_and_repeat_is_idempotent(browser):
     browser.get("/")
     category = browser.post("/v1/categories", headers=WRITE, json={"name": "Материалы"}).json()
     plan = browser.post(
@@ -176,7 +177,6 @@ def test_browser_purchase_advance_and_repeat_do_not_double_count(browser):
         "paid_on": "2027-05-15",
         "amount": "100000",
         "category_id": category["id"],
-        "plan_id": plan["id"],
         "description": "Аванс",
         "note": "",
     }
@@ -193,7 +193,7 @@ def test_browser_purchase_advance_and_repeat_do_not_double_count(browser):
     assert len(browser.get("/v1/expenses").json()) == 1
     report = browser.get("/v1/summary?start=2027-05-01&end=2027-06-01").json()
     assert report["months"][0]["actual"] == "100000.00"
-    assert report["months"][1]["planned_remaining"] == "180000.00"
+    assert report["months"][1]["planned_remaining"] == "280000.00"
     item = first.json()
     assert (
         browser.post(
@@ -203,4 +203,14 @@ def test_browser_purchase_advance_and_repeat_do_not_double_count(browser):
         ).status_code
         == 200
     )
-    assert browser.get(f"/v1/plans/{plan['id']}").json()["remaining"] == "280000.00"
+    saved_plan = browser.get(f"/v1/plans/{plan['id']}").json()
+    assert saved_plan["agreed"] == "280000.00"
+
+
+def test_web_editor_supports_inline_categories_without_purchase_links(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert "Создать категорию 1" in asset
+    assert "Создать категорию 2" in asset
+    assert "Связать с покупкой" not in asset
+    assert "Оплаты по этой покупке" not in asset

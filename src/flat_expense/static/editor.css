@@ -1,0 +1,29 @@
+.category-create-toggle {
+  align-self: flex-start;
+  margin-top: 1px;
+}
+
+.inline-category {
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f7f9f5;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.inline-category > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.inline-category .button {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.inline-category .text-button {
+  padding: 7px 0;
+}

@@ -7,11 +7,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import or_, select, update
+from sqlalchemy import select
 
 from flat_expense import service as s
 from flat_expense.models import (
-    Audit,
     Category,
     Expense,
     ImportBatch,
@@ -100,7 +99,7 @@ def import_xlsx(db, owner: int, path: Path):
             "Начальный импорт разрешён только в пустой учёт. Сначала проверьте текущие записи."
         )
     book = load_workbook(path, read_only=True, data_only=True)
-    plans, source_paid, known_codes = {}, {}, set()
+    plan_count, source_paid, known_codes = 0, {}, set()
     try:
         unified = "Архив плана" in book.sheetnames and "Архив связей расходов" in book.sheetnames
         if unified:
@@ -108,8 +107,6 @@ def import_xlsx(db, owner: int, path: Path):
                 code, group, title, total, paid, remaining, month, status, note = row
                 if code is None:
                     continue
-                if code in plans:
-                    raise s.DomainError("В исходном плане повторяется код позиции.")
                 if code in known_codes:
                     raise s.DomainError("В исходном плане повторяется код позиции.")
                 known_codes.add(code)
@@ -123,7 +120,7 @@ def import_xlsx(db, owner: int, path: Path):
                     continue
                 c = category(db, owner, *plan_categories(code, group))
                 cost = s.money(s.minor(total))
-                plan = s.add_plan(
+                s.add_plan(
                     db,
                     owner,
                     PlanIn(
@@ -135,7 +132,7 @@ def import_xlsx(db, owner: int, path: Path):
                         note=note or "",
                     ),
                 )
-                plans[code] = plan["id"]
+                plan_count += 1
             sheet = book["Архив связей расходов"]
         elif "Расходы" in book.sheetnames:
             sheet = book["Расходы"]
@@ -164,7 +161,6 @@ def import_xlsx(db, owner: int, path: Path):
                     category_id=c.id,
                     description=str(description),
                     note=str(note or ""),
-                    plan_id=plans.get(code),
                 ),
             )
             s.audit(
@@ -196,8 +192,8 @@ def import_xlsx(db, owner: int, path: Path):
         summary = {
             "expenses": count,
             "actual_total": s.money(amount_total),
-            "plans": len(plans),
-            "skipped_historical_plans": len(known_codes) - len(plans),
+            "plans": plan_count,
+            "skipped_historical_plans": len(known_codes) - plan_count,
             "loan_imported": False,
             "normalized_category_aliases": ALIASES,
             "already_imported": False,
@@ -210,7 +206,7 @@ def import_xlsx(db, owner: int, path: Path):
 
 
 def remove_historical_plan_cards(db, owner: int) -> dict:
-    """Remove synthetic history cards and detach every imported historical payment."""
+    """Remove synthetic historical plan cards left by older imports."""
 
     items = list(
         db.scalars(
@@ -220,24 +216,6 @@ def remove_historical_plan_cards(db, owner: int) -> dict:
             )
         )
     )
-    imported_expense_ids = select(Audit.entity_id).where(
-        Audit.owner_id == owner,
-        Audit.entity == "expense",
-        Audit.action == "import_source",
-    )
-    historical_plan_ids = [item.id for item in items]
-    unlinked = db.execute(
-        update(Expense)
-        .where(
-            Expense.owner_id == owner,
-            Expense.plan_id.is_not(None),
-            or_(
-                Expense.plan_id.in_(historical_plan_ids),
-                Expense.id.in_(imported_expense_ids),
-            ),
-        )
-        .values(plan_id=None, version=Expense.version + 1)
-    ).rowcount
     removed = []
     for item in items:
         view = s.plan_view(db, item)
@@ -250,10 +228,10 @@ def remove_historical_plan_cards(db, owner: int) -> dict:
             item.id,
             "remove_historical_card",
             view,
-            {"deleted": True, "linked_expenses_preserved": True},
+            {"deleted": True},
         )
     db.flush()
-    return {"removed_plans": len(removed), "unlinked_expenses": unlinked, "titles": removed}
+    return {"removed_plans": len(removed), "titles": removed}
 
 
 LOAN_HEADERS = [

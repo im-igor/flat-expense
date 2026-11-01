@@ -36,7 +36,6 @@ class ExpenseIn(Input):
     category_id: str
     description: Text
     note: str = Field(default="", max_length=4000)
-    plan_id: str | None = None
 
 
 class ExpenseEdit(ExpenseIn):

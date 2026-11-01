@@ -47,14 +47,13 @@ def test_full_expense_wizard_restarts_and_replay(client, headers, sessions, conf
     chat.send("/expense")
     chat.send("3 731,15")
     chat.send("31.05.2027")
-    chat.click("Самостоятельный расход")
+    chat.send("Шпаклёвка")
+    chat.click("Пропустить")
     chat.click("Ремонт")
     chat.click("Черновые материалы")
     # A new API instance reads the existing draft from the database.
     with TestClient(create_app(config, sessions)) as restarted:
         chat.client = restarted
-        chat.send("Шпаклёвка")
-        chat.click("Пропустить")
         confirm = chat.last["messages"][0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
         saved = chat.click("Подтвердить")
         duplicate = restarted.post(
@@ -68,7 +67,7 @@ def test_full_expense_wizard_restarts_and_replay(client, headers, sessions, conf
         assert expenses[0]["amount"] == "3731.15" and expenses[0]["paid_on"] == "2027-05-31"
 
 
-def test_plan_creation_and_partial_payment(client, headers, category):
+def test_plan_and_expense_creation_are_independent(client, headers, category):
     chat = Chat(client, headers)
     chat.send("/plan")
     chat.send("Двери")
@@ -78,18 +77,18 @@ def test_plan_creation_and_partial_payment(client, headers, category):
     chat.click("Работы")
     chat.click("Пропустить")
     chat.click("Подтвердить")
-    chat.click("Записать оплату")
+    chat.send("/expense")
     chat.send("100000")
     chat.send("15.05.2027")
-    chat.click("Оставить название покупки")
-    chat.send("Аванс")
+    chat.send("Аванс за двери")
+    chat.click("Пропустить")
+    chat.click("Ремонт")
+    chat.click("Работы")
     chat.click("Подтвердить")
     plans = client.get("/v1/plans", headers=headers).json()
-    assert plans[0]["paid"] == "100000.00" and plans[0]["remaining"] == "180000.00"
-    chat.click("Сумма")
-    chat.send("120000")
-    chat.click("Подтвердить")
-    assert client.get("/v1/plans", headers=headers).json()[0]["remaining"] == "160000.00"
+    expenses = client.get("/v1/expenses", headers=headers).json()
+    assert plans[0]["expected"] == "280000.00"
+    assert expenses[0]["amount"] == "100000.00"
 
 
 def test_bot_rejects_other_users_groups_and_stale_category(client, headers):
@@ -101,7 +100,8 @@ def test_bot_rejects_other_users_groups_and_stale_category(client, headers):
     assert "двух знаков" in chat.last["messages"][0]["text"]
     chat.send("100")
     chat.click("Сегодня")
-    chat.click("Самостоятельный расход")
+    chat.send("Расход")
+    chat.click("Пропустить")
     stale = chat.last["messages"][0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
     chat.click("Ремонт")
     chat.send(callback=stale)
@@ -115,7 +115,7 @@ def test_unknown_plan_can_be_priced_and_moved(client, headers, category):
     chat.click("Фактическая цена")
     chat.send("1000")
     chat.click("Подтвердить")
-    chat.click("Месяц остатка")
+    chat.click("Месяц расхода")
     chat.send("07.2027")
     chat.click("Подтвердить")
     saved = client.get("/v1/plans/" + p["id"], headers=headers).json()

@@ -33,7 +33,7 @@ def expense_card(item):
     return (
         f"{'Удалённый расход' if item['deleted'] else 'Расход'}\n{item['description']}\n"
         f"{rub(item['amount'])} · {item['paid_on']}\n{item['category']}\n"
-        f"{'Связан с планом' if item['plan_id'] else 'Самостоятельный расход'}\n{item['note']}"
+        f"{item['note']}"
     )
 
 
@@ -41,14 +41,7 @@ def plan_card(item):
     return (
         f"{'Архив' if item['archived'] else 'План'}: {item['title']}\n{item['category']}\n"
         f"Плановая стоимость: {rub(item['expected'])}\nФактическая цена: {rub(item['agreed'])}\n"
-        f"Оплачено: {rub(item['paid'])}\nОсталось: {rub(item['remaining'])}\n"
-        f"Месяц остатка: {(item['due_month'] or 'без даты')[:7]}\n"
-        + (
-            f"Оплачено сверх цены: {rub(item['overpaid'])}\n"
-            if item["overpaid"] and item["overpaid"] != "0.00"
-            else ""
-        )
-        + item["note"]
+        f"Месяц расхода: {(item['due_month'] or 'без даты')[:7]}\n{item['note']}"
     )
 
 
@@ -75,7 +68,7 @@ class Conversation:
 
     def home(self):
         return message(
-            "Учёт расходов на квартиру\n\nКаждая оплата хранится отдельно. План и фактическая цена покупки не считаются оплатой.\n\n/expense — расход\n/plan — будущая покупка\n/expenses — последние расходы\n/plans — планы и остатки\n/month — текущий месяц (или /month 2027-06)\n/forecast — прогноз\n/undated — планы без даты\n/deleted — удалённые расходы\n/archive — архив планов\n/categories — категории\n/cancel — отменить ввод",
+            "Учёт расходов на квартиру\n\nКаждая оплата хранится отдельно. План и фактическая цена покупки не считаются оплатой.\n\n/expense — расход\n/plan — будущая покупка\n/expenses — последние расходы\n/plans — будущие планы\n/month — текущий месяц (или /month 2027-06)\n/forecast — прогноз\n/undated — планы без даты\n/deleted — удалённые расходы\n/archive — архив планов\n/categories — категории\n/cancel — отменить ввод",
             [
                 [button("Записать расход", "new:expense"), button("Добавить план", "new:plan")],
                 [button("Расходы", "list:expenses:0"), button("Планы", "list:plans:0")],
@@ -83,17 +76,12 @@ class Conversation:
             ],
         )
 
-    def start(self, mode, plan_id=None):
+    def start(self, mode):
         self.data = {
             "mode": mode,
             "step": "amount" if mode == "expense" else "title",
             "values": {"note": ""},
         }
-        if plan_id:
-            p = s.owned(self.db, Plan, self.owner, plan_id)
-            if p.archived:
-                raise s.DomainError("Сначала восстановите план из архива.")
-            self.data["values"].update(plan_id=p.id, category_id=p.category_id, description=p.title)
         self.save()
         return self.prompt()
 
@@ -102,15 +90,14 @@ class Conversation:
         prompts = {
             "amount": "Сколько оплатили? Например: 3 731,15",
             "paid_on": "Дата оплаты: ДД.ММ.ГГГГ или «сегодня».",
-            "description": "Описание расхода. Для аванса можно указать «Аванс за двери». Связь с покупкой сохранится по ID.",
+            "description": "Описание расхода. Например: «Аванс за двери».",
             "title": "Как называется будущая покупка или работа?",
             "expected": "Плановая полная стоимость? Число, 0 или «-», если пока неизвестна.",
             "agreed": "Фактическая полная цена по счёту или договорённости? «-» — вернуться к плановой оценке. Это не сумма оплаты.",
-            "due_month": "На какой месяц запланирован неоплаченный остаток? ММ.ГГГГ или «-», если даты пока нет.",
+            "due_month": "На какой месяц запланирован расход? ММ.ГГГГ или «-», если даты пока нет.",
             "note": "Примечание? Можно пропустить кнопкой или отправить «-».",
             "category": "Выберите категорию 1.",
             "subcategory": "Выберите категорию 2.",
-            "link": "Это самостоятельный расход или оплата существующего плана?",
         }
         rows = []
         if step == "paid_on":
@@ -136,21 +123,12 @@ class Conversation:
                 rows.append([self.cb("← Назад", f"catpage:{max(0, page - 12)}")])
             if parent:
                 rows.append([self.cb("Без подкатегории", "root:" + parent)])
-        if step == "link":
-            page = self.data.get("page", 0)
-            rows.append([self.cb("Самостоятельный расход", "standalone")])
-            plans = s.list_plans(self.db, self.owner, offset=page, limit=9)
-            rows.extend([[self.cb(p["title"], "plan:" + p["id"])] for p in plans[:8]])
-            if len(plans) == 9:
-                rows.append([self.cb("Ещё планы →", f"planpage:{page + 8}")])
-            if page:
-                rows.append([self.cb("← Назад", f"planpage:{max(0, page - 8)}")])
         if step == "confirm":
             cat = s.category_view(
                 self.db, s.owned(self.db, Category, self.owner, v["category_id"])
             )["path"]
             if self.data["mode"].endswith("expense"):
-                text = f"Сохранить расход?\n{v['description']}\n{rub(v['amount'])} · {v['paid_on']}\n{cat}\n{'Оплата по плану' if v.get('plan_id') else 'Без плана'}\n{v.get('note', '')}"
+                text = f"Сохранить расход?\n{v['description']}\n{rub(v['amount'])} · {v['paid_on']}\n{cat}\n{v.get('note', '')}"
             else:
                 text = f"Сохранить план?\n{v['title']}\n{cat}\nПлан: {rub(v.get('expected'))}\nФактическая цена: {rub(v.get('agreed'))}\nМесяц: {(v.get('due_month') or 'без даты')[:7]}\n{v.get('note', '')}"
             return message(
@@ -183,7 +161,7 @@ class Conversation:
         self.data["values"]["category_id"] = c.id
         if self.data["mode"].startswith("edit"):
             return self.advance("confirm")
-        return self.advance("description" if self.data["mode"] == "expense" else "note")
+        return self.advance("confirm" if self.data["mode"] == "expense" else "note")
 
     def input(self, text):
         if not self.data:
@@ -213,12 +191,12 @@ class Conversation:
             return self.advance("confirm")
         next_step = {
             "amount": "paid_on",
-            "paid_on": "description" if v.get("plan_id") else "link",
+            "paid_on": "description",
             "description": "note",
             "title": "expected",
             "expected": "due_month",
             "due_month": "category",
-            "note": "confirm",
+            "note": "category" if self.data["mode"] == "expense" else "confirm",
         }[step]
         return self.advance(next_step)
 
@@ -257,12 +235,10 @@ class Conversation:
                     button("Примечание", "ed:note:" + identifier),
                 ],
                 [
-                    button("Связь с планом", "ed:link:" + identifier),
+                    button("Категория", "ed:category:" + identifier),
                     button("Удалить", f"askdele:{identifier}:{item['version']}"),
                 ],
             ]
-            if not item["plan_id"]:
-                rows.append([button("Категория", "ed:category:" + identifier)])
         return message(expense_card(item), rows)
 
     def show_plan(self, identifier):
@@ -271,13 +247,12 @@ class Conversation:
             rows = [[button("Восстановить", f"restorep:{identifier}:{item['version']}")]]
         else:
             rows = [
-                [button("Записать оплату", "pay:" + identifier)],
                 [
                     button("Плановая сумма", "ep:expected:" + identifier),
                     button("Фактическая цена", "ep:agreed:" + identifier),
                 ],
                 [
-                    button("Месяц остатка", "ep:due_month:" + identifier),
+                    button("Месяц расхода", "ep:due_month:" + identifier),
                     button("Название", "ep:title:" + identifier),
                 ],
                 [
@@ -289,11 +264,10 @@ class Conversation:
 
     def edit(self, kind, field, identifier):
         if kind == "ed":
-            allowed = {"amount", "paid_on", "description", "note", "category", "link"}
+            allowed = {"amount", "paid_on", "description", "note", "category"}
             item = s.expense_view(self.db, s.owned(self.db, Expense, self.owner, identifier))
             values = {
-                k: item[k]
-                for k in ("amount", "paid_on", "description", "note", "category_id", "plan_id")
+                k: item[k] for k in ("amount", "paid_on", "description", "note", "category_id")
             }
             mode = "edit_expense"
         else:
@@ -326,7 +300,7 @@ class Conversation:
         rows = [
             [
                 button(
-                    f"{i.get('description', i.get('title'))[:35]} · {rub(i.get('amount', i.get('remaining')))}",
+                    f"{i.get('description', i.get('title'))[:35]} · {rub(i.get('amount', i.get('agreed') or i.get('expected')))}",
                     ("ve:" if is_expense else "vp:") + i["id"],
                 )
             ]
@@ -343,7 +317,7 @@ class Conversation:
         lines = ["Расходы по месяцам · ₽"]
         for m in result["months"]:
             lines.append(
-                f"\n{m['month'][:7]}\nФакт: {rub(m['actual'])}\nОстаток плана: {rub(m['planned_remaining'])}\nИзвестный итог: {rub(m['known_total'])}"
+                f"\n{m['month'][:7]}\nФакт: {rub(m['actual'])}\nБудущий план: {rub(m['planned_remaining'])}\nИзвестный итог: {rub(m['known_total'])}"
                 + (f"\nБез оценки: {m['unpriced']}" if m["unpriced"] else "")
                 + ("\n⚠ Плановая дата уже прошла" if m["overdue_plan"] else "")
             )
@@ -374,9 +348,9 @@ class Conversation:
         if cmd == "/undated":
             plans = s.list_plans(self.db, self.owner, limit=10000)
             names = [
-                p["title"] + " · " + rub(p["remaining"])
+                p["title"] + " · " + rub(p["agreed"] or p["expected"])
                 for p in plans
-                if not p["due_month"] and p["remaining"] != "0.00"
+                if not p["due_month"]
             ]
             return message(
                 "Без даты:\n" + "\n".join(names) if names else "Все открытые планы имеют дату."
@@ -408,22 +382,7 @@ class Conversation:
                 return self.input(self.data["values"]["description"])
             if action in ("cat", "root") and step in ("category", "subcategory"):
                 return self.category_selected(parts[3])
-            if action == "standalone" and step == "link":
-                self.data["values"]["plan_id"] = None
-                return self.advance("category")
-            if action == "plan" and step == "link":
-                p = s.owned(self.db, Plan, self.owner, parts[3])
-                if p.archived:
-                    raise s.DomainError("План уже перенесён в архив.")
-                self.data["values"].update(
-                    plan_id=p.id, category_id=p.category_id, description=p.title
-                )
-                return self.advance(
-                    "confirm" if self.data["mode"].startswith("edit") else "description"
-                )
-            if (action == "planpage" and step == "link") or (
-                action == "catpage" and step in ("category", "subcategory")
-            ):
+            if action == "catpage" and step in ("category", "subcategory"):
                 self.data["page"] = max(0, int(parts[3]))
                 self.save()
                 return self.prompt()
@@ -431,8 +390,6 @@ class Conversation:
         if parts[0] == "new" and parts[1] in ("expense", "plan"):
             s.seed_categories(self.db, self.owner)
             return self.start(parts[1])
-        if parts[0] == "pay":
-            return self.start("expense", parts[1])
         if parts[0] == "ve":
             return self.show_expense(parts[1])
         if parts[0] == "vp":
@@ -448,7 +405,7 @@ class Conversation:
             text = (
                 "Удалить расход? Его можно восстановить."
                 if action == "dele"
-                else "Убрать план из прогноза? Уже сделанные оплаты останутся в истории."
+                else "Убрать план из прогноза?"
             )
             return message(
                 text,
