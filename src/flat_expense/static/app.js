@@ -386,7 +386,7 @@ async function closeEditor(force=false) {
 function openEditor(kind, item=null, plan=null) {
   if (!state.ready) return;
   editing={kind,item,initial:''};
-  const title=kind==='expense'?(item?'Оплата':'Новая оплата'):kind==='plan'?(item?'Покупка / этап':'Новый план'):(item?'Категория':'Новая категория');
+  const title=kind==='expense'?(item?'Оплата':'Новая оплата'):kind==='plan'?(item?'Покупка / этап':'Новый план'):(item?.id?'Категория':'Новая категория');
   $('#editor-title').textContent=title;
   $('#editor-eyebrow').textContent=kind==='expense'?'ФАКТИЧЕСКИЙ РАСХОД':kind==='plan'?'ПЛАНИРОВАНИЕ':'СПРАВОЧНИК';
   let fields='';
@@ -409,7 +409,7 @@ function openEditor(kind, item=null, plan=null) {
   } else {
     const parentId=item?.parent_id||'';
     const parent=state.categories.find(c=>c.id===parentId);
-    fields=(item?field('category_group','Группа',`<input id="category_group" value="${esc(parent?.name||'Основная категория')}" disabled>`,'Уровень категории после создания не меняется.',true):field('parent_id','Группа',`<select id="parent_id" name="parent_id"><option value="">Новая основная категория</option>${state.categories.filter(c=>!c.parent_id).map(c=>`<option value="${c.id}" ${c.id===parentId?'selected':''}>Подкатегория: ${esc(c.name)}</option>`).join('')}</select>`,'',true))+field('name','Название',`<input id="name" name="name" required maxlength="120" placeholder="Например, Материалы" value="${esc(item?.name||'')}">`,'',true);
+    fields=(item?.id?field('category_group','Группа',`<input id="category_group" value="${esc(parent?.name||'Основная категория')}" disabled>`,'Уровень категории после создания не меняется.',true):field('parent_id','Группа',`<select id="parent_id" name="parent_id"><option value="">Новая основная категория</option>${state.categories.filter(c=>!c.parent_id).map(c=>`<option value="${c.id}" ${c.id===parentId?'selected':''}>Подкатегория: ${esc(c.name)}</option>`).join('')}</select>`,'',true))+field('name','Название',`<input id="name" name="name" required maxlength="120" placeholder="Например, Материалы" value="${esc(item?.name||'')}">`,'',true);
   }
   const readOnly=!!item&&(item.deleted||item.archived);
   const payments=kind==='plan'&&item?state.expenses.filter(e=>e.plan_id===item.id&&!e.deleted):[];
@@ -451,7 +451,7 @@ async function saveForm(event) {
     if (current.kind==='category') {
       data={name:$('#name').value.trim()};
       if(current.item?.id){path='/v1/categories/'+current.item.id;method='PUT';}
-      else{data.parent_id=$('#parent_id').value||null;path='/v1/categories';method='POST';}
+      else{data.parent_id=$('#parent_id')?.value||current.item?.parent_id||null;path='/v1/categories';method='POST';}
     } else {
       const category=$('#category2').value||$('#category1').value;
       if (!category) throw new Error('Выберите категорию расхода.');
