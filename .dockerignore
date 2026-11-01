@@ -1,0 +1,16 @@
+.git
+.venv
+.uv-cache
+__pycache__
+.pytest_cache
+.ruff_cache
+.env*
+*.db
+*.xlsx
+*.pdf
+backups
+imports
+secrets
+tests
+docs
+tmp

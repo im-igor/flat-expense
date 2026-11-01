@@ -1,0 +1,78 @@
+name: flat-expense
+
+x-app: &app
+  build: .
+  image: flat-expense:local
+  environment: &environment
+    DATABASE_URL: postgresql+psycopg://flat:${POSTGRES_PASSWORD:?Run scripts/configure.py}@db:5432/flat
+    API_TOKEN: ${API_TOKEN:?Run scripts/configure.py}
+    ALLOWED_TELEGRAM_USER_IDS: ${ALLOWED_TELEGRAM_USER_IDS:?Set allowed IDs}
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: flat
+      POSTGRES_USER: flat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/configure.py}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U flat -d flat"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    shm_size: 128mb
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  migrate:
+    <<: *app
+    command: [alembic, upgrade, head]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+  api:
+    <<: *app
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  bot:
+    <<: *app
+    profiles: [bot]
+    environment:
+      <<: *environment
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      API_BASE_URL: http://api:8000
+    command: [python, -m, flat_expense.bot]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

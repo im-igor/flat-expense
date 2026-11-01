@@ -1,0 +1,46 @@
+name: checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: flat_test
+          POSTGRES_USER: flat
+          POSTGRES_PASSWORD: test-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U flat -d flat_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://flat:test-password@localhost:5432/flat_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.7"
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest -q
+      - name: Verify migrations on PostgreSQL
+        run: |
+          DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+          DATABASE_URL="$TEST_DATABASE_URL" uv run alembic check
+      - name: Build and smoke-test containers
+        run: |
+          python scripts/configure.py --telegram-user-id 123456789
+          docker compose up --build -d api
+          trap 'docker compose down' EXIT
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then break; fi
+            sleep 3
+          done
+          curl --fail http://127.0.0.1:8000/health
+          bash scripts/backup.sh
+          bash scripts/verify-backup.sh "$(ls -t backups/*.dump | head -n 1)"
