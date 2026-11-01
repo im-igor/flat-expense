@@ -15,10 +15,18 @@ class Settings(BaseSettings):
     api_base_url: str = "http://api:8000"
     web_enabled: bool = False
     web_owner_id: int | None = Field(default=None, gt=0)
+    web_public: bool = False
+    web_password_hash: SecretStr | None = None
+    web_allowed_hosts: str = "localhost,127.0.0.1,::1"
 
     @field_validator("web_owner_id", mode="before")
     @classmethod
     def optional_web_owner(cls, value):
+        return None if value == "" else value
+
+    @field_validator("web_password_hash", mode="before")
+    @classmethod
+    def optional_web_password_hash(cls, value):
         return None if value == "" else value
 
     @model_validator(mode="after")
@@ -28,7 +36,19 @@ class Settings(BaseSettings):
                 self.web_owner_id = next(iter(self.allowed_ids))
             if self.web_owner_id not in self.allowed_ids:
                 raise ValueError("Для веб-интерфейса выберите WEB_OWNER_ID из разрешённых ID.")
+        if self.web_public and self.web_password_hash is None:
+            raise ValueError("Для публичного веб-интерфейса задайте WEB_PASSWORD_HASH.")
         return self
+
+    @field_validator("web_allowed_hosts")
+    @classmethod
+    def validate_web_hosts(cls, value: str) -> str:
+        hosts = [host.strip().lower() for host in value.split(",") if host.strip()]
+        if not hosts or any(
+            "/" in host or " " in host or (":" in host and host != "::1") for host in hosts
+        ):
+            raise ValueError("WEB_ALLOWED_HOSTS: укажите имена или IP через запятую, без портов.")
+        return ",".join(dict.fromkeys(hosts))
 
     @field_validator("telegram_api_root")
     @classmethod
@@ -62,6 +82,10 @@ class Settings(BaseSettings):
     @property
     def allowed_ids(self) -> set[int]:
         return {int(x.strip()) for x in self.allowed_telegram_user_ids.split(",") if x.strip()}
+
+    @property
+    def allowed_web_hosts(self) -> set[str]:
+        return set(self.web_allowed_hosts.split(","))
 
 
 @lru_cache

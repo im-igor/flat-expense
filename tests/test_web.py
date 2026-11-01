@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from flat_expense.api import create_app
 from flat_expense.config import Settings
-from flat_expense.web import COOKIE, signature
+from flat_expense.web import COOKIE, password_hash, signature
 
 TOKEN = "web-test-token-with-at-least-32-characters"
 ORIGIN = "http://127.0.0.1:8317"
@@ -58,6 +58,56 @@ def test_root_issues_scoped_cookie_without_service_credential(browser):
     assert browser.get("/assets/.env").status_code == 404
     assert browser.get("/openapi.json").status_code == 401
     assert browser.get("/internal/telegram/cursor").status_code == 401
+
+
+def test_public_web_requires_password_and_supports_logout(sessions):
+    config = Settings(
+        api_token=TOKEN,
+        allowed_telegram_user_ids="111",
+        web_enabled=True,
+        web_public=True,
+        web_password_hash=password_hash("correct horse battery staple", b"0" * 16),
+        web_allowed_hosts="expenses.example,127.0.0.1",
+    )
+    with TestClient(create_app(config, sessions), base_url=ORIGIN) as client:
+        page = client.get("/", follow_redirects=False)
+        assert page.status_code == 303 and page.headers["location"] == "/login"
+        assert client.get("/login").status_code == 200
+        assert client.get("/v1/expenses").status_code == 401
+        headers = {"Origin": ORIGIN, "X-Flat-Expense": "login"}
+        assert (
+            client.post("/web/login", headers=headers, json={"password": "wrong"}).status_code
+            == 401
+        )
+        signed_in = client.post(
+            "/web/login", headers=headers, json={"password": "correct horse battery staple"}
+        )
+        assert signed_in.status_code == 200
+        assert "HttpOnly" in signed_in.headers["set-cookie"]
+        assert client.get("/").status_code == 200
+        assert client.get("/v1/expenses").status_code == 200
+        assert client.post("/web/logout", headers=WRITE).status_code == 200
+        assert client.get("/v1/expenses").status_code == 401
+
+
+def test_public_web_rejects_unlisted_host_and_missing_password(sessions):
+    with pytest.raises(ValidationError):
+        Settings(
+            api_token=TOKEN,
+            allowed_telegram_user_ids="111",
+            web_enabled=True,
+            web_public=True,
+        )
+    config = Settings(
+        api_token=TOKEN,
+        allowed_telegram_user_ids="111",
+        web_enabled=True,
+        web_public=True,
+        web_password_hash=password_hash("correct horse battery staple", b"1" * 16),
+        web_allowed_hosts="127.0.0.1",
+    )
+    with TestClient(create_app(config, sessions), base_url=ORIGIN) as client:
+        assert client.get("/login", headers={"Host": "attacker.example"}).status_code == 403
 
 
 def test_browser_auth_blocks_missing_tampered_and_expired_cookies(browser, web_config):

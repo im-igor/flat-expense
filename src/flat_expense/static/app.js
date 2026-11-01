@@ -59,6 +59,7 @@ async function request(path, options = {}) {
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
     const response = await fetch(path, {credentials:'same-origin', ...options, signal:controller.signal, headers:{'X-Flat-Expense':'web', ...(options.body ? {'Content-Type':'application/json'} : {}), ...options.headers}});
+    if (response.status === 401) { location.assign('/login'); throw new Error('Сессия завершена. Войдите снова.'); }
     let result;
     try { result = await response.json(); } catch { throw new Error('Сервер вернул непонятный ответ. Обновите страницу.'); }
     if (!response.ok) {
@@ -71,7 +72,7 @@ async function request(path, options = {}) {
     }
     return result;
   } catch (error) {
-    if (error.name === 'AbortError' || error instanceof TypeError) throw new Error('Нет ответа от сервера. Проверьте SSH-подключение и повторите действие; повторная отправка той же оплаты не создаст дубликат.');
+    if (error.name === 'AbortError' || error instanceof TypeError) throw new Error('Нет ответа от сервера. Проверьте подключение и повторите действие; повторная отправка той же оплаты не создаст дубликат.');
     throw error;
   } finally { clearTimeout(timer); }
 }
@@ -404,6 +405,9 @@ async function handleAction(event) {
       state[target.dataset.kind+'Page']=Number(target.dataset.page);
       render();
     } else if (action==='undated'||action==='overdue') setPlanFilter(action);
+    else if (action==='logout') {
+      await request('/web/logout',{method:'POST'}); location.assign('/login');
+    }
     else if (action==='refresh') {
       target.disabled=true;
       try {if(state.today)await loadData();else await start();notify('Данные обновлены');} finally {target.disabled=false;}

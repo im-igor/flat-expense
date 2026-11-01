@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Вход · Квартира</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand-mark" aria-hidden="true">⌂</div>
+    <p class="eyebrow">ЛИЧНЫЙ УЧЁТ</p>
+    <h1>Расходы на квартиру</h1>
+    <p>Введите пароль, чтобы открыть оплаты и планы.</p>
+    <form id="login-form">
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" minlength="12" required autofocus>
+      <p id="login-error" class="error hidden" role="alert"></p>
+      <button class="button primary" type="submit">Войти</button>
+    </form>
+  </main>
+  <script src="/assets/login.js" defer></script>
+</body>
+</html>

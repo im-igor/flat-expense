@@ -1,13 +1,15 @@
-"""SSH-only browser UI. SSH is the access boundary; service credentials stay server-side."""
+"""Password-protected browser UI; service credentials stay server-side."""
 
 import hashlib
 import hmac
 import secrets
+import threading
 import time
 from pathlib import Path
 
 from fastapi import HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
 from flat_expense import service as s
 
@@ -24,14 +26,43 @@ HEADERS = {
         "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     ),
 }
+LOGIN_WINDOW = 5 * 60
+LOGIN_LIMIT = 6
 
 
-def local_request(request, config):
+class LoginIn(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+def password_hash(password: str, salt: bytes | None = None) -> str:
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+    return f"scrypt$16384$8$1${salt.hex()}${digest.hex()}"
+
+
+def password_matches(password: str, encoded: str) -> bool:
+    try:
+        algorithm, n, r, p, salt, expected = encoded.split("$")
+        if algorithm != "scrypt" or (int(n), int(r), int(p)) != (16384, 8, 1):
+            return False
+        actual = hashlib.scrypt(
+            password.encode(),
+            salt=bytes.fromhex(salt),
+            n=int(n),
+            r=int(r),
+            p=int(p),
+            dklen=32,
+        )
+        return hmac.compare_digest(actual, bytes.fromhex(expected))
+    except (ValueError, TypeError):
+        return False
+
+
+def allowed_request(request, config):
     if not config.web_enabled:
         raise HTTPException(401, "Веб-интерфейс не включён.")
-    # Protect against DNS rebinding; never trust forwarded Host headers here.
-    if request.url.hostname not in ("localhost", "127.0.0.1", "::1"):
-        raise HTTPException(403, "Откройте интерфейс через локальный SSH-туннель.")
+    if (request.url.hostname or "").lower() not in config.allowed_web_hosts:
+        raise HTTPException(403, "Этот адрес не разрешён для веб-интерфейса.")
 
 
 def signature(payload, config):
@@ -47,8 +78,7 @@ def session_cookie(config):
     return payload + ":" + signature(payload, config)
 
 
-def browser_actor(request, config):
-    local_request(request, config)
+def session_owner(request, config):
     token = request.cookies.get(COOKIE, "")
     try:
         if len(token) > 200:
@@ -62,8 +92,16 @@ def browser_actor(request, config):
             or int(owner) not in config.allowed_ids
         ):
             raise ValueError
+        return int(owner)
     except (ValueError, TypeError):
-        raise HTTPException(401, "Сессия истекла. Обновите страницу.") from None
+        return None
+
+
+def browser_actor(request, config):
+    allowed_request(request, config)
+    owner = session_owner(request, config)
+    if owner is None:
+        raise HTTPException(401, "Сессия истекла. Войдите снова.")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         expected_origin = str(request.base_url).rstrip("/")
         if (
@@ -71,10 +109,13 @@ def browser_actor(request, config):
             or request.headers.get("x-flat-expense") != "web"
         ):
             raise HTTPException(403, "Запрос должен быть отправлен из интерфейса приложения.")
-    return int(owner)
+    return owner
 
 
 def install_web(app, config):
+    attempts: dict[str, list[float]] = {}
+    attempts_lock = threading.Lock()
+
     @app.middleware("http")
     async def browser_headers(request, call_next):
         response = await call_next(request)
@@ -84,8 +125,55 @@ def install_web(app, config):
 
     @app.get("/", include_in_schema=False)
     def index(request: Request):
-        local_request(request, config)
+        allowed_request(request, config)
+        if config.web_public and session_owner(request, config) is None:
+            return RedirectResponse("/login", status_code=303, headers=HEADERS)
         response = FileResponse(ASSETS / "index.html", headers=HEADERS)
+        if not config.web_public and session_owner(request, config) is None:
+            response.set_cookie(
+                COOKIE,
+                session_cookie(config),
+                max_age=LIFETIME,
+                httponly=True,
+                samesite="strict",
+                secure=False,
+                path="/",
+            )
+        return response
+
+    @app.get("/login", include_in_schema=False)
+    def login_page(request: Request):
+        allowed_request(request, config)
+        if not config.web_public or session_owner(request, config) is not None:
+            return RedirectResponse("/", status_code=303, headers=HEADERS)
+        return FileResponse(ASSETS / "login.html", headers=HEADERS)
+
+    @app.post("/web/login", include_in_schema=False)
+    def login(data: LoginIn, request: Request):
+        allowed_request(request, config)
+        if not config.web_public or config.web_password_hash is None:
+            raise HTTPException(404)
+        expected_origin = str(request.base_url).rstrip("/")
+        if (
+            request.headers.get("origin") != expected_origin
+            or request.headers.get("x-flat-expense") != "login"
+        ):
+            raise HTTPException(403, "Запрос должен быть отправлен со страницы входа.")
+        address = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        with attempts_lock:
+            recent = [stamp for stamp in attempts.get(address, []) if now - stamp < LOGIN_WINDOW]
+            attempts[address] = recent
+            if len(recent) >= LOGIN_LIMIT:
+                raise HTTPException(429, "Слишком много попыток. Повторите позже.")
+        encoded = config.web_password_hash.get_secret_value()
+        if not password_matches(data.password, encoded):
+            with attempts_lock:
+                attempts[address].append(now)
+            raise HTTPException(401, "Неверный пароль.")
+        with attempts_lock:
+            attempts.pop(address, None)
+        response = JSONResponse({"status": "ok"}, headers=HEADERS)
         response.set_cookie(
             COOKIE,
             session_cookie(config),
@@ -97,10 +185,17 @@ def install_web(app, config):
         )
         return response
 
+    @app.post("/web/logout", include_in_schema=False)
+    def logout(request: Request):
+        browser_actor(request, config)
+        response = JSONResponse({"status": "ok"}, headers=HEADERS)
+        response.delete_cookie(COOKIE, path="/", httponly=True, samesite="strict")
+        return response
+
     @app.get("/assets/{name}", include_in_schema=False)
     def asset(name: str, request: Request):
-        local_request(request, config)
-        if name not in ("app.js", "style.css"):
+        allowed_request(request, config)
+        if name not in ("app.js", "login.js", "style.css"):
             raise HTTPException(404)
         return FileResponse(ASSETS / name, headers=HEADERS)
 
