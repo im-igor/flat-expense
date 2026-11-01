@@ -37,12 +37,13 @@ class LoginIn(BaseModel):
 def password_hash(password: str, salt: bytes | None = None) -> str:
     salt = salt or secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
-    return f"scrypt$16384$8$1${salt.hex()}${digest.hex()}"
+    # Colons keep the value stable when it passes through Compose's .env parser.
+    return f"scrypt:16384:8:1:{salt.hex()}:{digest.hex()}"
 
 
 def password_matches(password: str, encoded: str) -> bool:
     try:
-        algorithm, n, r, p, salt, expected = encoded.split("$")
+        algorithm, n, r, p, salt, expected = encoded.split(":")
         if algorithm != "scrypt" or (int(n), int(r), int(p)) != (16384, 8, 1):
             return False
         actual = hashlib.scrypt(

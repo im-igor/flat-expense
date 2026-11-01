@@ -12,7 +12,7 @@ from pathlib import Path
 def password_hash(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
-    return f"scrypt$16384$8$1${salt.hex()}${digest.hex()}"
+    return f"scrypt:16384:8:1:{salt.hex()}:{digest.hex()}"
 
 
 def main():
