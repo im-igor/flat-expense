@@ -85,11 +85,13 @@ def test_split_combined_utility_plans_is_scoped_and_idempotent():
             3_300_000,
             2,
         )
+        assert utility["note"] == "Исходный финансовый план"
         capital = next(row for row in rows if row["category_id"] == "capital")
         assert (capital["title"], capital["expected_minor"], capital["due_month"]) == (
             "Капремонт",
             400_000,
             date(2026, 11, 1),
         )
+        assert capital["note"] == "Исходный финансовый план"
         other = next(row for row in rows if row["id"] == "other")
         assert other["expected_minor"] == 3_500_000

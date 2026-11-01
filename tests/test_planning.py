@@ -16,7 +16,7 @@ from flat_expense.planning import (
 from flat_expense.schemas import PlanIn
 
 
-def add_plan(db, owner, category_id, title, expected=None, agreed=None, due_month=None):
+def add_plan(db, owner, category_id, title, expected=None, agreed=None, due_month=None, note=""):
     return s.add_plan(
         db,
         owner,
@@ -26,6 +26,7 @@ def add_plan(db, owner, category_id, title, expected=None, agreed=None, due_mont
             expected=expected,
             agreed=agreed,
             due_month=due_month,
+            note=note,
         ),
     )
 
@@ -53,7 +54,13 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
                 add_plan(db, owner, materials.id, old_title)
         purchase_titles = [title for _, title, _ in TECH_PURCHASES] + OTHER_PURCHASES
         for title in purchase_titles:
-            add_plan(db, owner, purchases.id, title)
+            add_plan(
+                db,
+                owner,
+                purchases.id,
+                title,
+                note="Из Excel" if title == "Вытяжка" else "",
+            )
 
         result = apply_future_plan(db, owner)
         assert result["completed_stages"] == [1, 2]
@@ -96,6 +103,7 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         assert stage9.category_id == works.id
         assert stage9.expected_minor is None
         assert stage9.due_month == date(2027, 4, 1)
+        assert stage9.note == ""
 
         material_titles = {new_title for _, new_title in MATERIALS.values()}
         material_rows = list(
@@ -108,6 +116,7 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         )
         assert len(material_rows) == 11
         assert all(item.category_id == materials.id for item in material_rows)
+        assert all(item.note == "" for item in material_rows)
         material_by_title = {item.title: item for item in material_rows}
         for stage, (_, title) in MATERIALS.items():
             expected_month = date(2027, 4, 1) if stage == 9 else WORK_STAGES[stage][2]
@@ -131,6 +140,7 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
             item = db.scalar(select(Plan).where(Plan.owner_id == owner, Plan.title == title))
             assert item.category_id == rooms[room]
             assert item.expected_minor == amount * 100
+            assert item.note == ("Из Excel" if title == "Вытяжка" else "")
 
         purchase_months = Counter(
             db.scalars(

@@ -9,11 +9,6 @@ from flat_expense import service as s
 from flat_expense.models import Category, Plan
 from flat_expense.schemas import PlanIn
 
-SOURCE_NOTE = "Смета Neat от 22.08.2026, ред. 0912"
-TECH_PRICE_NOTE = (
-    "Ориентир верхнего ценового сегмента на 01.11.2026; "
-    "уточнить модель и поставщика перед покупкой."
-)
 TECH_PRICE_SOURCES = [
     "https://high-level.ru/brands/signature/",
     "https://miele-store.ru/market/sushilnye-mashiny/recommend/premium/",
@@ -154,9 +149,6 @@ def apply_future_plan(db, owner: int) -> dict:
             _update(db, owner, item, due_month=due_month)
 
     stage9 = _find_plan(db, owner, "Этап 9: дополнительная шумоизоляция стен")
-    stage9_note = (
-        f"Опциональный этап; нулевая сумма в {SOURCE_NOTE}; цену уточнить при подтверждении работ."
-    )
     if stage9 is None:
         s.add_plan(
             db,
@@ -165,21 +157,15 @@ def apply_future_plan(db, owner: int) -> dict:
                 title="Этап 9: дополнительная шумоизоляция стен",
                 category_id=works.id,
                 due_month=date(2027, 4, 1),
-                note=stage9_note,
             ),
         )
-    elif (
-        stage9.category_id != works.id
-        or stage9.due_month != date(2027, 4, 1)
-        or stage9.note != stage9_note
-    ):
+    elif stage9.category_id != works.id or stage9.due_month != date(2027, 4, 1):
         _update(
             db,
             owner,
             stage9,
             category_id=works.id,
             due_month=date(2027, 4, 1),
-            note=stage9_note,
         )
 
     material_count = 0
@@ -190,12 +176,6 @@ def apply_future_plan(db, owner: int) -> dict:
         material_amount = work_amount * Decimal("0.60")
         material_budget += material_amount
         item = _find_plan(db, owner, old_title, new_title)
-        note = (
-            f"Материалы для незавершённого этапа {stage}. "
-            f"Плановая сумма = 60% стоимости работ по {SOURCE_NOTE}."
-        )
-        if stage == 9:
-            note += " В смете стоимость опционального этапа равна 0 ₽; сумму нужно уточнить."
         if item is None:
             s.add_plan(
                 db,
@@ -205,7 +185,6 @@ def apply_future_plan(db, owner: int) -> dict:
                     category_id=materials.id,
                     expected=material_amount,
                     due_month=due_month,
-                    note=note,
                 ),
             )
         else:
@@ -215,7 +194,6 @@ def apply_future_plan(db, owner: int) -> dict:
                 or item.category_id != materials.id
                 or item.expected_minor != expected_minor
                 or item.due_month != due_month
-                or item.note != note
             ):
                 _update(
                     db,
@@ -225,7 +203,6 @@ def apply_future_plan(db, owner: int) -> dict:
                     category_id=materials.id,
                     expected=material_amount,
                     due_month=due_month,
-                    note=note,
                 )
         material_count += 1
 
@@ -247,36 +224,20 @@ def apply_future_plan(db, owner: int) -> dict:
     for index, item in enumerate(purchase_items):
         due_month = months[index // 4]
         distribution[due_month.isoformat()] += 1
-        marker = "Распределено равномерно из исходного плана покупок."
-        note = (
-            item.note
-            if marker in (item.note or "")
-            else (f"{item.note}; {marker}" if item.note else marker)
-        )
-        if item.due_month != due_month or item.note != note:
-            _update(db, owner, item, due_month=due_month, note=note)
+        if item.due_month != due_month:
+            _update(db, owner, item, due_month=due_month)
 
     tech_budget = 0
     for room, title, amount in TECH_PURCHASES:
         item = purchase_by_title[title]
         category_id = technology_rooms[room].id
-        note = (
-            item.note
-            if TECH_PRICE_NOTE in (item.note or "")
-            else (f"{item.note}; {TECH_PRICE_NOTE}" if item.note else TECH_PRICE_NOTE)
-        )
-        if (
-            item.category_id != category_id
-            or item.expected_minor != amount * 100
-            or item.note != note
-        ):
+        if item.category_id != category_id or item.expected_minor != amount * 100:
             _update(
                 db,
                 owner,
                 item,
                 category_id=category_id,
                 expected=Decimal(amount),
-                note=note,
             )
         tech_budget += amount
 

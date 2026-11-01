@@ -14,7 +14,6 @@ depends_on = None
 COMBINED_MINOR = 34_000 * 100
 UTILITY_MINOR = 33_000 * 100
 CAPITAL_REPAIR_MINOR = 4_000 * 100
-MARKER = "Разделено из общего плана коммуналки и капремонта."
 
 CATEGORIES = sa.table(
     "categories",
@@ -37,13 +36,6 @@ PLANS = sa.table(
     sa.column("version", sa.Integer()),
     sa.column("created_at", sa.DateTime(timezone=True)),
 )
-
-
-def with_marker(note: str | None) -> str:
-    value = (note or "").strip()
-    if MARKER in value:
-        return value
-    return f"{value}; {MARKER}" if value else MARKER
 
 
 def split_combined_plans(bind) -> None:
@@ -70,7 +62,7 @@ def split_combined_plans(bind) -> None:
         if combined and capital_category_id is None:
             raise RuntimeError("Не найдена категория «Кап ремонт» для разделения планов.")
         for item in combined:
-            note = with_marker(item["note"])
+            note = item["note"] or ""
             bind.execute(
                 sa.update(PLANS)
                 .where(PLANS.c.id == item["id"])
