@@ -5,7 +5,12 @@ from pathlib import Path
 
 from flat_expense import service as s
 from flat_expense.db import make_sessions
-from flat_expense.importer import import_loan_xlsx, import_xlsx, verify_expenses_xlsx
+from flat_expense.importer import (
+    import_loan_xlsx,
+    import_xlsx,
+    remove_historical_plan_cards,
+    verify_expenses_xlsx,
+)
 from flat_expense.planning import apply_future_plan
 
 
@@ -26,6 +31,9 @@ def main():
     planner = commands.add_parser("reconcile-future-plan")
     planner.add_argument("--owner", required=True, type=int)
     planner.add_argument("--dry-run", action="store_true")
+    cleanup = commands.add_parser("remove-historical-plan-cards")
+    cleanup.add_argument("--owner", required=True, type=int)
+    cleanup.add_argument("--dry-run", action="store_true")
     seed = commands.add_parser("seed")
     seed.add_argument("--owner", required=True, type=int)
     args = parser.parse_args()
@@ -50,6 +58,13 @@ def main():
                     raise SystemExit(1)
             elif args.command == "reconcile-future-plan":
                 result = apply_future_plan(db, args.owner)
+                if args.dry_run:
+                    db.rollback()
+                else:
+                    db.commit()
+                print(json.dumps({**result, "dry_run": args.dry_run}, ensure_ascii=False))
+            elif args.command == "remove-historical-plan-cards":
+                result = remove_historical_plan_cards(db, args.owner)
                 if args.dry_run:
                     db.rollback()
                 else:

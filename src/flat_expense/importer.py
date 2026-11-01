@@ -7,10 +7,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from flat_expense import service as s
-from flat_expense.models import Category, Expense, ImportBatch, LoanImportBatch, LoanPeriod
+from flat_expense.models import Category, Expense, ImportBatch, LoanImportBatch, LoanPeriod, Plan
 from flat_expense.schemas import ExpenseIn, PlanIn
 
 ALIASES = {
@@ -18,6 +18,16 @@ ALIASES = {
     "Материалы": "Черновые материалы",
     "Капремонт": "Кап ремонт",
 }
+HISTORICAL_PLAN_TITLES = (
+    "Сделка и страхование: оплачено",
+    "Дизайн-проект и визуализация: оплачено",
+    "Коммунальные платежи: оплачено",
+    "Капремонт: оплачено",
+    "БТИ и проект перепланировки: оплачено",
+    "Консультация и проект климата: оплачено",
+    "Повторная приёмка: оплачено",
+    "Этапы 1–2: потолочная шумоизоляция, подготовка, перегородки",
+)
 
 
 def category(db, owner, first, second):
@@ -71,8 +81,6 @@ def import_xlsx(db, owner: int, path: Path):
         raise s.DomainError(
             "Начальный импорт уже выполнен из другого файла. Повторный импорт новой версии требует сверки, чтобы не задвоить расходы."
         )
-    from flat_expense.models import Expense, Plan
-
     if db.scalar(select(Expense.id).where(Expense.owner_id == owner).limit(1)) or db.scalar(
         select(Plan.id).where(Plan.owner_id == owner).limit(1)
     ):
@@ -80,7 +88,7 @@ def import_xlsx(db, owner: int, path: Path):
             "Начальный импорт разрешён только в пустой учёт. Сначала проверьте текущие записи."
         )
     book = load_workbook(path, read_only=True, data_only=True)
-    plans, source_paid = {}, {}
+    plans, source_paid, known_codes = {}, {}, set()
     try:
         unified = "Архив плана" in book.sheetnames and "Архив связей расходов" in book.sheetnames
         if unified:
@@ -90,22 +98,28 @@ def import_xlsx(db, owner: int, path: Path):
                     continue
                 if code in plans:
                     raise s.DomainError("В исходном плане повторяется код позиции.")
+                if code in known_codes:
+                    raise s.DomainError("В исходном плане повторяется код позиции.")
+                known_codes.add(code)
+                closed = status == "Оплачено"
+                source_paid[code] = s.minor(paid) or 0
+                if closed:
+                    continue
                 c = category(db, owner, *plan_categories(code, group))
                 cost = s.money(s.minor(total))
-                closed = status == "Оплачено"
                 plan = s.add_plan(
                     db,
                     owner,
                     PlanIn(
                         title=title,
                         category_id=c.id,
-                        expected=None if closed else cost,
-                        agreed=cost if closed else None,
+                        expected=cost,
+                        agreed=None,
                         due_month=source_date(month).replace(day=1) if month is not None else None,
                         note=note or "",
                     ),
                 )
-                plans[code], source_paid[code] = plan["id"], s.minor(paid) or 0
+                plans[code] = plan["id"]
             sheet = book["Архив связей расходов"]
         elif "Расходы" in book.sheetnames:
             sheet = book["Расходы"]
@@ -114,7 +128,7 @@ def import_xlsx(db, owner: int, path: Path):
         headers = [sheet.cell(1, c).value for c in range(1, 7)]
         if headers[:5] != ["Дата", "Сумма", "Категория1", "Категория2", "Описание расхода"]:
             raise s.DomainError("Заголовки исходного журнала не совпадают с ожидаемой структурой.")
-        count, amount_total = 0, 0
+        count, amount_total, paid_by_code = 0, 0, Counter()
         for row in sheet.iter_rows(min_row=2, max_col=8, values_only=True):
             paid_on, amount, first, second, description, note, bot_id, code = row
             if all(v is None for v in row[:6]):
@@ -122,7 +136,7 @@ def import_xlsx(db, owner: int, path: Path):
             if not description or amount is None:
                 raise s.DomainError("В исходном журнале есть неполная строка; импорт отменён.")
             c = category(db, owner, first, second)
-            if unified and code not in plans:
+            if unified and code not in known_codes:
                 raise s.DomainError("Оплата ссылается на отсутствующую позицию плана.")
             amount_minor = s.minor(amount)
             result = s.add_expense(
@@ -155,10 +169,11 @@ def import_xlsx(db, owner: int, path: Path):
             )
             count += 1
             amount_total += amount_minor
+            if unified:
+                paid_by_code[code] += amount_minor
         if unified:
-            paid = s.paid_totals(db, owner)
-            for code, identifier in plans.items():
-                if paid.get(identifier, 0) != source_paid[code]:
+            for code, expected_paid in source_paid.items():
+                if paid_by_code[code] != expected_paid:
                     raise s.DomainError(
                         "Оплаты по позиции не совпали с контрольной суммой исходного плана. Импорт отменён."
                     )
@@ -166,6 +181,7 @@ def import_xlsx(db, owner: int, path: Path):
             "expenses": count,
             "actual_total": s.money(amount_total),
             "plans": len(plans),
+            "skipped_historical_plans": len(known_codes) - len(plans),
             "loan_imported": False,
             "normalized_category_aliases": ALIASES,
             "already_imported": False,
@@ -175,6 +191,45 @@ def import_xlsx(db, owner: int, path: Path):
         return summary
     finally:
         book.close()
+
+
+def remove_historical_plan_cards(db, owner: int) -> dict:
+    """Delete imported paid aggregates while preserving their individual expenses."""
+
+    items = list(
+        db.scalars(
+            select(Plan).where(
+                Plan.owner_id == owner,
+                Plan.title.in_(HISTORICAL_PLAN_TITLES),
+            )
+        )
+    )
+    unlinked = 0
+    removed = []
+    for item in items:
+        view = s.plan_view(db, item)
+        if view["remaining"] != "0.00":
+            raise s.DomainError(
+                f"Историческая карточка «{item.title}» больше не закрыта; очистка остановлена."
+            )
+        unlinked += db.execute(
+            update(Expense)
+            .where(Expense.owner_id == owner, Expense.plan_id == item.id)
+            .values(plan_id=None, version=Expense.version + 1)
+        ).rowcount
+        removed.append(item.title)
+        db.delete(item)
+        s.audit(
+            db,
+            owner,
+            "plan",
+            item.id,
+            "remove_historical_card",
+            view,
+            {"deleted": True, "linked_expenses_preserved": True},
+        )
+    db.flush()
+    return {"removed_plans": len(removed), "unlinked_expenses": unlinked, "titles": removed}
 
 
 LOAN_HEADERS = [
