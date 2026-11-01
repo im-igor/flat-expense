@@ -66,6 +66,7 @@ class Expense(Base):
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     paid_on: Mapped[date] = mapped_column(Date)
     amount_minor: Mapped[int] = mapped_column(BigInteger)
+    planned_amount_minor: Mapped[int] = mapped_column(BigInteger)
     category_id: Mapped[str] = mapped_column(ForeignKey("categories.id"))
     description: Mapped[str] = mapped_column(String(500))
     note: Mapped[str] = mapped_column(String(4000), default="")
@@ -74,6 +75,7 @@ class Expense(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     __table_args__ = (
         CheckConstraint("amount_minor > 0"),
+        CheckConstraint("planned_amount_minor > 0", name="ck_expenses_planned_amount_positive"),
         Index("expense_owner_date", "owner_id", "paid_on"),
     )
 

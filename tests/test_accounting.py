@@ -148,6 +148,71 @@ def test_edit_fact_recalculates_both_months(client, headers, category):
     assert may["actual"] == "0.00" and june["actual"] == "3797.82"
 
 
+def test_expense_plan_and_paid_amount_are_independent(client, headers, category):
+    expense = make_expense(
+        client,
+        headers,
+        category,
+        amount="118565.00",
+        planned_amount="382231.20",
+        description="Материалы по этапу 3 штукатурка стен",
+        paid_on="2026-10-21",
+    )
+    assert expense["planned_amount"] == "382231.20"
+    assert expense["amount"] == "118565.00"
+
+    response = client.put(
+        f"/v1/expenses/{expense['id']}",
+        headers={**headers, "Idempotency-Key": "independent-amounts"},
+        json={
+            "planned_amount": "382231.20",
+            "amount": "120000.00",
+            "paid_on": "2026-10-21",
+            "category_id": category["id"],
+            "description": expense["description"],
+            "version": expense["version"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["planned_amount"] == "382231.20"
+    assert response.json()["amount"] == "120000.00"
+
+    # A legacy client that omits the new field changes only the paid amount.
+    updated = response.json()
+    legacy = client.put(
+        f"/v1/expenses/{expense['id']}",
+        headers={**headers, "Idempotency-Key": "legacy-amount-edit"},
+        json={
+            "amount": "118565.00",
+            "paid_on": "2026-10-21",
+            "category_id": category["id"],
+            "description": expense["description"],
+            "version": updated["version"],
+        },
+    ).json()
+    assert legacy["planned_amount"] == "382231.20"
+    assert legacy["amount"] == "118565.00"
+
+
+def test_new_expense_initializes_plan_once_from_fact(client, headers, category):
+    expense = make_expense(client, headers, category, amount="118565.00")
+    assert expense["planned_amount"] == "118565.00"
+
+    updated = client.put(
+        f"/v1/expenses/{expense['id']}",
+        headers={**headers, "Idempotency-Key": "change-fact-only"},
+        json={
+            "amount": "120000.00",
+            "paid_on": expense["paid_on"],
+            "category_id": category["id"],
+            "description": expense["description"],
+            "version": expense["version"],
+        },
+    ).json()
+    assert updated["planned_amount"] == "118565.00"
+    assert updated["amount"] == "120000.00"
+
+
 @pytest.mark.parametrize("amount", ["-1", "0", "1.001", "NaN", "Infinity", "10000000000"])
 def test_invalid_money_rejected(client, headers, category, amount):
     response = post(

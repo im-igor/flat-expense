@@ -33,6 +33,7 @@ class CategoryReplaceIn(Input):
 class ExpenseIn(Input):
     paid_on: date
     amount: Payment
+    planned_amount: Payment | None = None
     category_id: str
     description: Text
     note: str = Field(default="", max_length=4000)

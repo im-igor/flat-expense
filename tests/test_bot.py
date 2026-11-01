@@ -65,6 +65,7 @@ def test_full_expense_wizard_restarts_and_replay(client, headers, sessions, conf
         expenses = restarted.get("/v1/expenses", headers=headers).json()
         assert len(expenses) == 1
         assert expenses[0]["amount"] == "3731.15" and expenses[0]["paid_on"] == "2027-05-31"
+        assert expenses[0]["planned_amount"] == "3731.15"
 
 
 def test_plan_and_expense_creation_are_independent(client, headers, category):

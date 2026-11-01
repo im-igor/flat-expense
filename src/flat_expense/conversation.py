@@ -32,7 +32,8 @@ def rub(value):
 def expense_card(item):
     return (
         f"{'Удалённый расход' if item['deleted'] else 'Расход'}\n{item['description']}\n"
-        f"{rub(item['amount'])} · {item['paid_on']}\n{item['category']}\n"
+        f"План: {rub(item['planned_amount'])}\nОплачено: {rub(item['amount'])} · {item['paid_on']}\n"
+        f"{item['category']}\n"
         f"{item['note']}"
     )
 
@@ -89,6 +90,7 @@ class Conversation:
         step, v = self.data["step"], self.data["values"]
         prompts = {
             "amount": "Сколько оплатили? Например: 3 731,15",
+            "planned_amount": "Сколько планировали потратить на эту позицию?",
             "paid_on": "Дата оплаты: ДД.ММ.ГГГГ или «сегодня».",
             "description": "Описание расхода. Например: «Аванс за двери».",
             "title": "Как называется будущая покупка или работа?",
@@ -128,7 +130,8 @@ class Conversation:
                 self.db, s.owned(self.db, Category, self.owner, v["category_id"])
             )["path"]
             if self.data["mode"].endswith("expense"):
-                text = f"Сохранить расход?\n{v['description']}\n{rub(v['amount'])} · {v['paid_on']}\n{cat}\n{v.get('note', '')}"
+                planned = v.get("planned_amount") or v["amount"]
+                text = f"Сохранить расход?\n{v['description']}\nПлан: {rub(planned)}\nОплачено: {rub(v['amount'])} · {v['paid_on']}\n{cat}\n{v.get('note', '')}"
             else:
                 text = f"Сохранить план?\n{v['title']}\n{cat}\nПлан: {rub(v.get('expected'))}\nФактическая цена: {rub(v.get('agreed'))}\nМесяц: {(v.get('due_month') or 'без даты')[:7]}\n{v.get('note', '')}"
             return message(
@@ -168,10 +171,10 @@ class Conversation:
             return self.home()
         text = text.strip()
         step, v = self.data["step"], dict(self.data["values"])
-        if step in ("amount", "expected", "agreed"):
+        if step in ("amount", "planned_amount", "expected", "agreed"):
             value = None if text in ("-", "неизвестно") and step != "amount" else s.minor(text)
-            if step == "amount" and not value:
-                raise s.DomainError("Сумма оплаты должна быть больше нуля.")
+            if step in ("amount", "planned_amount") and not value:
+                raise s.DomainError("Сумма должна быть больше нуля.")
             v[step] = s.money(value)
         elif step in ("paid_on", "due_month"):
             v[step] = (
@@ -227,15 +230,18 @@ class Conversation:
         else:
             rows = [
                 [
-                    button("Сумма", "ed:amount:" + identifier),
+                    button("План", "ed:planned_amount:" + identifier),
+                    button("Оплачено", "ed:amount:" + identifier),
+                ],
+                [
                     button("Дата", "ed:paid_on:" + identifier),
-                ],
-                [
                     button("Описание", "ed:description:" + identifier),
-                    button("Примечание", "ed:note:" + identifier),
                 ],
                 [
+                    button("Примечание", "ed:note:" + identifier),
                     button("Категория", "ed:category:" + identifier),
+                ],
+                [
                     button("Удалить", f"askdele:{identifier}:{item['version']}"),
                 ],
             ]
@@ -264,10 +270,18 @@ class Conversation:
 
     def edit(self, kind, field, identifier):
         if kind == "ed":
-            allowed = {"amount", "paid_on", "description", "note", "category"}
+            allowed = {"amount", "planned_amount", "paid_on", "description", "note", "category"}
             item = s.expense_view(self.db, s.owned(self.db, Expense, self.owner, identifier))
             values = {
-                k: item[k] for k in ("amount", "paid_on", "description", "note", "category_id")
+                k: item[k]
+                for k in (
+                    "amount",
+                    "planned_amount",
+                    "paid_on",
+                    "description",
+                    "note",
+                    "category_id",
+                )
             }
             mode = "edit_expense"
         else:

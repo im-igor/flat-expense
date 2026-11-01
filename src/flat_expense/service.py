@@ -268,6 +268,7 @@ def expense_view(db: Session, item: Expense) -> dict:
         "id": item.id,
         "paid_on": item.paid_on.isoformat(),
         "amount": money(item.amount_minor),
+        "planned_amount": money(item.planned_amount_minor),
         "category_id": item.category_id,
         "category": category_view(db, category)["path"],
         "description": item.description,
@@ -316,6 +317,7 @@ def add_expense(db: Session, owner: int, data: ExpenseIn) -> dict:
         owner_id=owner,
         paid_on=data.paid_on,
         amount_minor=minor(data.amount),
+        planned_amount_minor=minor(data.planned_amount or data.amount),
         category_id=data.category_id,
         description=data.description,
         note=data.note,
@@ -338,6 +340,8 @@ def update_expense(db: Session, owner: int, identifier: str, data: ExpenseIn, ve
     for name in ("paid_on", "category_id", "description", "note"):
         setattr(item, name, getattr(data, name))
     item.amount_minor = minor(data.amount)
+    if data.planned_amount is not None:
+        item.planned_amount_minor = minor(data.planned_amount)
     item.version += 1
     db.flush()
     result = expense_view(db, item)

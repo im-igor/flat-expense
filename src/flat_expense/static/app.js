@@ -96,7 +96,7 @@ async function request(path, options = {}) {
     try { result = await response.json(); } catch { throw new Error('Сервер вернул непонятный ответ. Обновите страницу.'); }
     if (!response.ok) {
       if (Array.isArray(result.detail)) {
-        const names = {amount:'сумму оплаты', expected:'плановую сумму', agreed:'фактическую цену', description:'описание', title:'название', paid_on:'дату оплаты', note:'примечание'};
+        const names = {amount:'сумму оплаты', planned_amount:'плановую сумму', expected:'плановую сумму', agreed:'фактическую цену', description:'описание', title:'название', paid_on:'дату оплаты', note:'примечание'};
         const field = result.detail[0]?.loc?.at(-1);
         throw new Error('Проверьте ' + (names[field] || 'обязательные поля') + '. Суммы — до 9 999 999 999,99 ₽, описание — до 500 символов.');
       }
@@ -312,7 +312,7 @@ function categorySuggestion(kind,item) {
   return suggested&&!recommendationDismissed(kind,item,suggested.id)?suggested:null;
 }
 const editableFieldLabels={
-  amount:'сумму оплаты',paid_on:'дату оплаты',description:'описание',note:'примечание',
+  amount:'оплаченную сумму',planned_amount:'плановую сумму',paid_on:'дату оплаты',description:'описание',note:'примечание',
   title:'название',expected:'плановую стоимость',agreed:'фактическую цену',due_month:'месяц оплаты',
   category1:'категорию 1',category2:'категорию 2'
 };
@@ -350,7 +350,7 @@ function ledgerMonthTotals(rows) {
   const totals=new Map();
   rows.forEach(row=>{
     const key=ledgerMonthKey(row), total=totals.get(key)||{plan:0n,fact:0n,paid:0n,remaining:0n,unpriced:0};
-    if(row.kind==='expense'&&!row.item.deleted){const amount=cents(row.item.amount);total.plan+=amount;total.fact+=amount;total.paid+=amount;}
+    if(row.kind==='expense'&&!row.item.deleted){const amount=cents(row.item.amount);total.plan+=cents(row.item.planned_amount);total.fact+=amount;total.paid+=amount;}
     else if(row.kind==='loan'){
       const amount=cents(row.item.total), paid=row.item.payment_date<=state.today;
       total.plan+=amount;
@@ -373,7 +373,7 @@ function ledgerMonthHeader(key,total) {
 function ledgerRowMarkup(kind,item) {
   const [first]=categoryParts(item.category_id);
   if(kind==='expense'){
-    return `<tr class="${item.deleted?'inactive-row':'paid-row'}"><td class="date-cell">${editableValue('expense',item,'paid_on',dateLabel(item.paid_on))}</td><td>${editableValue('expense',item,'category1',first)}</td>${categoryCell('expense',item)}<td>${editableValue('expense',item,'description',item.description,'table-main')}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num bold-num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${rub(0n)}</td><td>${item.deleted?'<span class="badge gray">Удалена</span>':'<span class="badge paid">Оплачено</span>'}</td><td>${editableValue('expense',item,'note',item.note||'—','table-note')}</td><td><button class="text-button" data-action="${item.deleted?'restore-expense':'edit-expense'}" data-id="${item.id}">${item.deleted?'Восстановить':'Изменить'}</button></td></tr>`;
+    return `<tr class="${item.deleted?'inactive-row':'paid-row'}"><td class="date-cell">${editableValue('expense',item,'paid_on',dateLabel(item.paid_on))}</td><td>${editableValue('expense',item,'category1',first)}</td>${categoryCell('expense',item)}<td>${editableValue('expense',item,'description',item.description,'table-main')}</td><td class="num">${editableValue('expense',item,'planned_amount',rub(item.planned_amount))}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num bold-num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${rub(0n)}</td><td>${item.deleted?'<span class="badge gray">Удалена</span>':'<span class="badge paid">Оплачено</span>'}</td><td>${editableValue('expense',item,'note',item.note||'—','table-note')}</td><td><button class="text-button" data-action="${item.deleted?'restore-expense':'edit-expense'}" data-id="${item.id}">${item.deleted?'Восстановить':'Изменить'}</button></td></tr>`;
   }
   if(kind==='loan'){
     const paid=item.payment_date<=state.today;
@@ -385,7 +385,7 @@ function ledgerRowMarkup(kind,item) {
 function ledgerBalance(rows) {
   let plan=0n,fact=0n,count=0;
   rows.forEach(row=>{
-    if(row.kind==='expense'&&!row.item.deleted){const amount=cents(row.item.amount);plan+=amount;fact+=amount;count+=1;}
+    if(row.kind==='expense'&&!row.item.deleted){plan+=cents(row.item.planned_amount);fact+=cents(row.item.amount);count+=1;}
     else if(row.kind==='loan'&&row.item.payment_date<=state.today){const amount=cents(row.item.total);plan+=amount;fact+=amount;count+=1;}
     else if(row.kind==='plan'&&!row.item.archived&&row.item.expected!==null&&row.item.agreed!==null){plan+=cents(row.item.expected);fact+=cents(row.item.agreed);count+=1;}
   });
@@ -538,8 +538,9 @@ function openEditor(kind, item=null, focusField='') {
   $('#editor-eyebrow').textContent=kind==='expense'?'ФАКТИЧЕСКИЙ РАСХОД':kind==='plan'?'ПЛАНИРОВАНИЕ':'СПРАВОЧНИК';
   let fields='';
   if (kind==='expense') {
-    const v=item||{amount:'',paid_on:state.today,description:'',category_id:'',note:''};
-    fields=field('amount','Сумма оплаты, ₽',`<input id="amount" name="amount" inputmode="decimal" required placeholder="Например, 25 000" value="${esc(v.amount)}">`,'Сколько перечислили этим платежом.')+
+    const v=item||{amount:'',planned_amount:'',paid_on:state.today,description:'',category_id:'',note:''};
+    fields=field('planned_amount','Плановая сумма, ₽',`<input id="planned_amount" name="planned_amount" inputmode="decimal" placeholder="По умолчанию равна оплате" value="${esc(v.planned_amount)}">`,'Сколько планировали потратить на эту позицию.')+
+      field('amount','Оплачено, ₽',`<input id="amount" name="amount" inputmode="decimal" required placeholder="Например, 25 000" value="${esc(v.amount)}">`,'Сколько фактически перечислили.')+
       field('paid_on','Дата оплаты',`<input id="paid_on" name="paid_on" type="date" required min="2000-01-01" max="2100-12-31" value="${v.paid_on}">`)+
       field('description','Описание расхода',`<input id="description" name="description" required maxlength="500" placeholder="Например, аванс за межкомнатные двери" value="${esc(v.description)}">`,'',true)+categoryFields(v.category_id)+
       field('note','Примечание',`<textarea id="note" name="note" maxlength="4000" placeholder="Магазин, подрядчик или детали платежа">${esc(v.note)}</textarea>`,'',true);
@@ -561,6 +562,11 @@ function openEditor(kind, item=null, focusField='') {
     ${categoryRemoval}
     <div class="form-actions">${item?.id&&kind!=='category'?`<button type="button" class="text-button danger-text delete-button" data-action="${kind==='expense'?(item.deleted?'restore-expense':'delete-expense'):'delete-plan'}" data-id="${item.id}">${kind==='expense'?(item.deleted?'Восстановить':'Удалить'):'Удалить'}</button>`:''}<button type="button" class="button secondary" data-action="close-dialog">${readOnly?'Закрыть':'Отмена'}</button>${readOnly?'':'<button type="submit" class="button primary" id="save-record">Сохранить</button>'}</div></form>`;
   if (readOnly) $('#record-form').querySelectorAll('input,textarea,select,.category-create-toggle,.inline-category button').forEach(el=>el.disabled=true);
+  if(kind==='expense'&&!item){
+    const planned=$('#planned_amount'),amount=$('#amount');let plannedTouched=false;
+    planned.addEventListener('input',()=>{plannedTouched=true;});
+    amount.addEventListener('input',()=>{if(!plannedTouched)planned.value=amount.value;});
+  }
   editing.initial=formSnapshot();
   $('#editor').showModal();
   if(focusField&&!readOnly)requestAnimationFrame(()=>{
@@ -602,7 +608,7 @@ async function saveForm(event) {
       const category=$('#category2').value||$('#category1').value;
       if (!category) throw new Error('Выберите категорию расхода.');
       data=current.kind==='expense'?{
-        amount:moneyInput($('#amount').value,true),paid_on:$('#paid_on').value,
+        amount:moneyInput($('#amount').value,true),planned_amount:moneyInput($('#planned_amount').value)||moneyInput($('#amount').value,true),paid_on:$('#paid_on').value,
         description:$('#description').value.trim(),note:$('#note').value.trim(),
         category_id:category,
       }:{
@@ -665,7 +671,7 @@ async function removeCategory(id) {
 async function applyCategorySuggestion(kind,id,categoryId) {
   const item=(kind==='expense'?state.expenses:state.plans).find(value=>value.id===id);
   if(!item)throw new Error('Запись не найдена. Обновите список.');
-  const data=kind==='expense'?{amount:item.amount,paid_on:item.paid_on,description:item.description,note:item.note,category_id:categoryId,version:item.version}:{title:item.title,expected:item.expected,agreed:item.agreed,due_month:item.due_month,category_id:categoryId,note:item.note,version:item.version};
+  const data=kind==='expense'?{amount:item.amount,planned_amount:item.planned_amount,paid_on:item.paid_on,description:item.description,note:item.note,category_id:categoryId,version:item.version}:{title:item.title,expected:item.expected,agreed:item.agreed,due_month:item.due_month,category_id:categoryId,note:item.note,version:item.version};
   await mutation(`/v1/${kind==='expense'?'expenses':'plans'}/${id}`,'PUT',data);
   try{localStorage.removeItem(recommendationKey(kind,item,categoryId));}catch{}
   notify('Категория назначена');

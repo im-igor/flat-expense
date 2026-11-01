@@ -252,7 +252,12 @@ def test_ledger_has_dependent_category_filters(browser):
 def test_ledger_shows_paid_values_missing_budgets_and_filtered_balance(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text
-    assert "total.plan+=amount;total.fact+=amount;total.paid+=amount" in asset
+    assert (
+        "total.plan+=cents(row.item.planned_amount);total.fact+=amount;total.paid+=amount" in asset
+    )
+    assert "editableValue('expense',item,'planned_amount'" in asset
+    assert "planned_amount:moneyInput($('#planned_amount').value)||moneyInput($('#amount').value,true)" in asset
+    assert "if(!plannedTouched)planned.value=amount.value" in asset
     assert "budget-missing-cell" in asset
     assert "function ledgerBalance(rows)" in asset
     assert "Баланс по текущим фильтрам" in asset
