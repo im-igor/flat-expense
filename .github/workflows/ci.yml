@@ -49,3 +49,8 @@ jobs:
           test -s /tmp/flat-web.js
           bash scripts/backup.sh
           bash scripts/verify-backup.sh "$(ls -t backups/*.dump | head -n 1)"
+      - name: Verify registry-free fast image layer
+        run: |
+          docker build --network=none --pull=false \
+            --build-arg BASE_IMAGE=flat-expense:local \
+            --file Dockerfile.fast --tag flat-expense:fast-test .
