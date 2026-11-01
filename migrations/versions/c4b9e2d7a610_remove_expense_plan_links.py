@@ -34,11 +34,24 @@ def scrub_json_history():
     bind = op.get_bind()
     tables = (
         (
-            sa.table("audit", sa.column("id"), sa.column("before"), sa.column("after")),
+            sa.table(
+                "audit",
+                sa.column("id", sa.String()),
+                sa.column("before", sa.JSON()),
+                sa.column("after", sa.JSON()),
+            ),
             ("before", "after"),
         ),
-        (sa.table("requests", sa.column("id"), sa.column("response")), ("response",)),
-        (sa.table("drafts", sa.column("owner_id"), sa.column("data")), ("data",)),
+        (
+            sa.table("requests", sa.column("id", sa.String()), sa.column("response", sa.JSON())),
+            ("response",),
+        ),
+        (
+            sa.table(
+                "drafts", sa.column("owner_id", sa.BigInteger()), sa.column("data", sa.JSON())
+            ),
+            ("data",),
+        ),
     )
     for table, columns in tables:
         primary_key = list(table.c)[0]
