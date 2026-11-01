@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,7 +11,27 @@ class Settings(BaseSettings):
     api_token: SecretStr = Field(min_length=32)
     allowed_telegram_user_ids: str
     telegram_bot_token: SecretStr | None = None
+    telegram_api_root: str = "https://api.telegram.org"
     api_base_url: str = "http://api:8000"
+
+    @field_validator("telegram_api_root")
+    @classmethod
+    def validate_telegram_api_root(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        url = urlsplit(value)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username is not None
+            or url.password is not None
+            or url.path
+            or url.query
+            or url.fragment
+        ):
+            raise ValueError("TELEGRAM_API_ROOT: нужен HTTPS-адрес без пути, пароля и параметров.")
+        if url.port is not None and not 1 <= url.port <= 65535:
+            raise ValueError("Некорректный порт Telegram-релея.")
+        return value
 
     @field_validator("allowed_telegram_user_ids")
     @classmethod

@@ -67,6 +67,7 @@ services:
     environment:
       <<: *environment
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_API_ROOT: ${TELEGRAM_API_ROOT:-https://api.telegram.org}
       API_BASE_URL: http://api:8000
     command: [python, -m, flat_expense.bot]
     depends_on:

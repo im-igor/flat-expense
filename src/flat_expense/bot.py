@@ -5,6 +5,8 @@ import logging
 
 import httpx
 from aiogram import Bot
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import (
     TelegramBadRequest,
     TelegramForbiddenError,
@@ -22,7 +24,10 @@ async def run():
     config = settings()
     if config.telegram_bot_token is None:
         raise SystemExit("Задайте TELEGRAM_BOT_TOKEN в защищённом окружении.")
-    bot = Bot(token=config.telegram_bot_token.get_secret_value())
+    bot = Bot(
+        token=config.telegram_bot_token.get_secret_value(),
+        session=AiohttpSession(api=TelegramAPIServer.from_base(config.telegram_api_root)),
+    )
     async with (
         bot,
         httpx.AsyncClient(
@@ -102,4 +107,13 @@ async def run():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:
+        # Startup/network errors may contain request URLs with a bot token.
+        log.error(
+            "Бот остановлен (%s). Проверьте настройки и связь с Telegram.", type(exc).__name__
+        )
+        raise SystemExit(1) from None

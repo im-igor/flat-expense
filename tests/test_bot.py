@@ -120,3 +120,38 @@ def test_unknown_plan_can_be_priced_and_moved(client, headers, category):
     chat.click("Подтвердить")
     saved = client.get("/v1/plans/" + p["id"], headers=headers).json()
     assert saved["agreed"] == "1000.00" and saved["due_month"] == "2027-07-01"
+
+
+def test_telegram_relay_uses_https_for_methods_and_files():
+    import pytest
+    from aiogram.client.telegram import TelegramAPIServer
+    from pydantic import ValidationError
+
+    from flat_expense.config import Settings
+
+    fields = {
+        "api_token": "test-only-api-token-with-more-than-32-characters",
+        "allowed_telegram_user_ids": "111",
+    }
+    config = Settings(**fields, telegram_api_root="https://relay.example.org:9443/")
+    server = TelegramAPIServer.from_base(config.telegram_api_root)
+    assert (
+        server.api_url("fake-token", "getMe")
+        == "https://relay.example.org:9443/botfake-token/getMe"
+    )
+    assert (
+        server.file_url("fake-token", "documents/file.pdf")
+        == "https://relay.example.org:9443/file/botfake-token/documents/file.pdf"
+    )
+    for value in (
+        "http://relay.example.org",
+        "https://user:password@relay.example.org",
+        "https://relay.example.org/extra",
+        "https://relay.example.org?token=value",
+        "https://relay.example.org#fragment",
+        "https://relay.example.org:0",
+        "https://relay.example.org:99999",
+        "",
+    ):
+        with pytest.raises(ValidationError):
+            Settings(**fields, telegram_api_root=value)
