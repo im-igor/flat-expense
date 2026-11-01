@@ -13,7 +13,11 @@ from flat_expense import service as s
 from flat_expense.models import Category, Expense, ImportBatch, LoanImportBatch, LoanPeriod
 from flat_expense.schemas import ExpenseIn, PlanIn
 
-ALIASES = {"Мтериалы": "Материалы", "Капремонт": "Кап ремонт"}
+ALIASES = {
+    "Мтериалы": "Черновые материалы",
+    "Материалы": "Черновые материалы",
+    "Капремонт": "Кап ремонт",
+}
 
 
 def category(db, owner, first, second):

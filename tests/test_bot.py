@@ -49,7 +49,7 @@ def test_full_expense_wizard_restarts_and_replay(client, headers, sessions, conf
     chat.send("31.05.2027")
     chat.click("Самостоятельный расход")
     chat.click("Ремонт")
-    chat.click("Материалы")
+    chat.click("Черновые материалы")
     # A new API instance reads the existing draft from the database.
     with TestClient(create_app(config, sessions)) as restarted:
         chat.client = restarted

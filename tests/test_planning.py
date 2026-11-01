@@ -4,8 +4,15 @@ from datetime import date
 from sqlalchemy import func, select
 
 from flat_expense import service as s
-from flat_expense.models import Plan
-from flat_expense.planning import MATERIALS, WORK_STAGES, apply_future_plan
+from flat_expense.models import Category, Plan
+from flat_expense.planning import (
+    MATERIALS,
+    OTHER_PURCHASES,
+    TECH_PRICE_SOURCES,
+    TECH_PURCHASES,
+    WORK_STAGES,
+    apply_future_plan,
+)
 from flat_expense.schemas import PlanIn
 
 
@@ -44,8 +51,9 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         for old_title, _ in MATERIALS.values():
             if old_title:
                 add_plan(db, owner, materials.id, old_title)
-        for index in range(40):
-            add_plan(db, owner, purchases.id, f"Покупка {index + 1}")
+        purchase_titles = [title for _, title, _ in TECH_PURCHASES] + OTHER_PURCHASES
+        for title in purchase_titles:
+            add_plan(db, owner, purchases.id, title)
 
         result = apply_future_plan(db, owner)
         assert result["completed_stages"] == [1, 2]
@@ -53,6 +61,18 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         assert result["remaining_priced_stages"] == 10
         assert result["remaining_work_total"] == "4169238.00"
         assert result["material_positions"] == 11
+        assert result["material_budget_total"] == "2501542.80"
+        assert result["materials_category"] == "Черновые материалы"
+        assert result["tech_positions"] == 32
+        assert result["tech_budget_total"] == f"{sum(row[2] for row in TECH_PURCHASES):.2f}"
+        assert result["tech_rooms"] == {
+            "Кухня": 14,
+            "Санузел / постирочная": 5,
+            "Гостиная / Общее пространство": 3,
+            "Климат": 5,
+            "Общее": 5,
+        }
+        assert result["tech_price_sources"] == TECH_PRICE_SOURCES
         assert result["purchase_distribution"] == {
             "2026-11-01": 4,
             "2026-12-01": 4,
@@ -88,17 +108,35 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         )
         assert len(material_rows) == 11
         assert all(item.category_id == materials.id for item in material_rows)
-        assert all(item.expected_minor is None for item in material_rows)
         material_by_title = {item.title: item for item in material_rows}
         for stage, (_, title) in MATERIALS.items():
             expected_month = date(2027, 4, 1) if stage == 9 else WORK_STAGES[stage][2]
             assert material_by_title[title].due_month == expected_month
+            work_amount = 0 if stage == 9 else WORK_STAGES[stage][1]
+            assert material_by_title[title].expected_minor == work_amount * 60
+
+        assert materials.name == "Черновые материалы"
+        technology = db.scalar(
+            select(Category).where(
+                Category.owner_id == owner,
+                Category.parent_id.is_(None),
+                Category.name == "Техника",
+            )
+        )
+        rooms = {
+            item.name: item.id
+            for item in db.scalars(select(Category).where(Category.parent_id == technology.id))
+        }
+        for room, title, amount in TECH_PURCHASES:
+            item = db.scalar(select(Plan).where(Plan.owner_id == owner, Plan.title == title))
+            assert item.category_id == rooms[room]
+            assert item.expected_minor == amount * 100
 
         purchase_months = Counter(
             db.scalars(
                 select(Plan.due_month).where(
                     Plan.owner_id == owner,
-                    Plan.category_id == purchases.id,
+                    Plan.title.in_(purchase_titles),
                 )
             )
         )

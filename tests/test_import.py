@@ -68,7 +68,7 @@ def test_import_numeric_strings_linking_aliases_and_idempotence(sessions, tmp_pa
         )
         plan = s.list_plans(db, 111)[0]
         assert plan["paid"] == "3731.15" and plan["remaining"] == "6268.85"
-        assert "Материалы" in s.list_expenses(db, 111)[0]["category"]
+        assert "Черновые материалы" in s.list_expenses(db, 111)[0]["category"]
     with sessions() as db, db.begin():
         assert import_xlsx(db, 111, path)["already_imported"]
         assert db.scalar(select(func.count()).select_from(Expense)) == 1

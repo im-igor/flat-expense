@@ -15,6 +15,18 @@ function cents(value) {
   const [whole, fraction = ''] = String(value).split('.');
   return BigInt(whole) * 100n + BigInt((fraction + '00').slice(0, 2));
 }
+function requestKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  if (globalThis.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  }
+  return `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 function rub(value, wholeOnly = false) {
   if (value === null || value === undefined) return 'Не оценено';
   const amount = typeof value === 'bigint' ? value : cents(value);
@@ -217,6 +229,59 @@ function categoryParts(id) {
   if(!category.parent_id)return [category.name,''];
   return [state.categories.find(c=>c.id===category.parent_id)?.name||'',category.name];
 }
+function normalizedText(value) {
+  return String(value||'').toLocaleLowerCase('ru').replaceAll('ё','е').replace(/[^а-яa-z0-9]+/g,' ').trim();
+}
+function recommendationKey(kind,item,categoryId) { return `flat-expense:category-dismissed:${kind}:${item.id}:${categoryId}`; }
+function recommendationDismissed(kind,item,categoryId) {
+  try { return localStorage.getItem(recommendationKey(kind,item,categoryId))==='1'; } catch { return false; }
+}
+function categorySuggestion(kind,item) {
+  const current=state.categories.find(c=>c.id===item.category_id);
+  if(!current||current.parent_id)return null;
+  const children=state.categories.filter(c=>c.parent_id===current.id);
+  if(!children.length||(kind==='plan'&&state.expenses.some(e=>e.plan_id===item.id)))return null;
+  if(kind==='expense'&&item.plan_id){
+    const planned=state.categories.find(c=>c.id===planById(item.plan_id)?.category_id);
+    if(planned?.parent_id===current.id&&!recommendationDismissed(kind,item,planned.id))return planned;
+  }
+  const main=normalizedText(kind==='expense'?item.description:item.title);
+  const peers=[...state.expenses.map(value=>({kind:'expense',item:value})),...state.plans.map(value=>({kind:'plan',item:value}))];
+  const exact=peers.map(value=>value.item).filter(peer=>peer.id!==item.id&&normalizedText(peer.description||peer.title)===main).map(peer=>state.categories.find(c=>c.id===peer.category_id)).filter(c=>c?.parent_id===current.id);
+  if(exact.length){
+    const counts=new Map();exact.forEach(c=>counts.set(c.id,(counts.get(c.id)||0)+1));
+    const best=[...counts].sort((a,b)=>b[1]-a[1])[0];
+    const suggested=children.find(c=>c.id===best[0]);
+    if(suggested&&!recommendationDismissed(kind,item,suggested.id))return suggested;
+  }
+  const text=normalizedText([item.description||item.title,item.note].join(' '));
+  const hints={
+    'работы':['этап','работ','монтаж','демонтаж'],
+    'черновые материалы':['материал','штукатур','шпаклев','грунтов','стяжк','кварцвинил','плитк','керамогранит'],
+    'дизайн':['дизайн','проект'],
+    'климат':['климат','вентиляц','кондиц','увлажнен'],
+    'перепланировка':['переплан'],
+    'приемка':['приемк'],
+    'авторский надзор':['авторск','надзор'],
+    'страховка':['страхов'],
+    'кап ремонт':['капремонт','кап ремонт'],
+    'коммуналка от ук':['коммунал','управляющ'],
+    'покупки':['двер','потол','светиль','сантехник','кухн','шкаф','кроват','матрас','диван','стол','стул','штор'],
+  };
+  const scored=children.map(child=>{
+    const name=normalizedText(child.name), words=name.split(' ').filter(word=>word.length>=4);
+    const patterns=[...words.map(word=>word.slice(0,Math.max(4,word.length-2))),...(hints[name]||[])];
+    return {child,score:new Set(patterns.filter(pattern=>text.includes(pattern))).size};
+  }).sort((a,b)=>b.score-a.score);
+  const suggested=scored[0]?.score>0&&scored[0].score>=(scored[1]?.score||0)+1?scored[0].child:children.length===1?children[0]:null;
+  return suggested&&!recommendationDismissed(kind,item,suggested.id)?suggested:null;
+}
+function categoryCell(kind,item) {
+  const [,second]=categoryParts(item.category_id);
+  if(second)return `<td>${esc(second)}</td>`;
+  const suggestion=categorySuggestion(kind,item), inactive=item.deleted||item.archived;
+  return `<td class="category-missing-cell"><span class="badge amber">Не выбрана</span>${inactive?'':suggestion?`<span class="category-suggestion">Рекомендуется: <strong>${esc(suggestion.name)}</strong><span class="suggestion-actions"><button class="text-button" data-action="accept-category" data-kind="${kind}" data-id="${item.id}" data-category-id="${suggestion.id}">Принять</button><button class="text-button muted-button" data-action="dismiss-category" data-kind="${kind}" data-id="${item.id}" data-category-id="${suggestion.id}">Отклонить</button></span></span>`:`<button class="text-button category-manual" data-action="edit-${kind}" data-id="${item.id}">Назначить вручную</button>`}</td>`;
+}
 function renderLedger() {
   const f=state.ledgerFilters, rows=ledgerRows();
   state.ledgerPage=Math.min(state.ledgerPage,Math.max(0,Math.ceil(rows.length/PAGE_SIZE)-1));
@@ -224,7 +289,7 @@ function renderLedger() {
   const actual=rows.filter(r=>(r.kind==='expense'&&!r.item.deleted)||(r.kind==='loan'&&r.item.payment_date<=state.today)).reduce((sum,r)=>sum+cents(r.kind==='expense'?r.item.amount:r.item.total),0n);
   const remaining=rows.filter(r=>(r.kind==='plan'&&!r.item.archived)||(r.kind==='loan'&&r.item.payment_date>state.today)).reduce((sum,r)=>sum+cents(r.kind==='plan'?r.item.remaining:r.item.total),0n);
   $('#view-ledger').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="ledger-search">Поиск</label><input id="ledger-search" type="search" placeholder="Найти оплату или план" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="ledger-category">Категория</label><select id="ledger-category"><option value="">Все категории</option>${categoryOptions(f.category)}</select><label class="screen-reader" for="ledger-type">Тип</label><select id="ledger-type"><option value="" ${!f.type?'selected':''}>Все расходы</option><option value="expense" ${f.type==='expense'?'selected':''}>Только оплаты</option><option value="plan" ${f.type==='plan'?'selected':''}>Только планы</option><option value="loan" ${f.type==='loan'?'selected':''}>Только заём</option></select><label class="screen-reader" for="ledger-month">Месяц</label><input id="ledger-month" type="month" value="${f.month}"><label class="filter-label"><input type="checkbox" id="ledger-inactive" ${f.inactive?'checked':''}>Включая архив</label></div>
-  ${visible.length?`<div class="table-scroll"><table class="ledger-table"><thead><tr><th>Дата</th><th class="num">План</th><th class="num">Факт, цена</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th><th>Примечание</th><th></th></tr></thead><tbody>${visible.map(({kind,item})=>{const [first,second]=categoryParts(item.category_id);if(kind==='expense'){const plan=planById(item.plan_id);return `<tr class="${item.deleted?'inactive-row':''}"><td class="date-cell">${dateLabel(item.paid_on)}</td><td class="num">${plan?.expected===null||!plan?'—':rub(plan.expected)}</td><td class="num">${plan?.agreed===null||!plan?'—':rub(plan.agreed)}</td><td class="num bold-num">${rub(item.amount)}</td><td class="num">${plan?.remaining===null||!plan?'—':rub(plan.remaining)}</td><td>${item.deleted?'<span class="badge gray">Удалена</span>':'<span class="badge paid">Оплата</span>'}</td><td>${esc(first)}</td><td>${esc(second)||'—'}</td><td><button class="text-button table-main" data-action="edit-expense" data-id="${item.id}">${esc(item.description)}</button>${plan?`<span class="table-note">В счёт: ${esc(plan.title)}</span>`:''}</td><td><span class="table-note">${esc(item.note)||'—'}</span></td><td><button class="text-button" data-action="${item.deleted?'restore-expense':'edit-expense'}" data-id="${item.id}">${item.deleted?'Восстановить':'Изменить'}</button></td></tr>`;}if(kind==='loan'){const paid=item.payment_date<=state.today;return `<tr><td class="date-cell">${dateLabel(item.payment_date)}</td><td class="num">${rub(item.total)}</td><td class="num">${paid?rub(item.total):'—'}</td><td class="num bold-num">${paid?rub(item.total):rub(0n)}</td><td class="num">${paid?rub(0n):rub(item.total)}</td><td>${paid?'<span class="badge paid">Оплачено</span>':'<span class="badge">Запланировано</span>'}</td><td>Заём</td><td>Взнос</td><td><span class="table-main">Взнос по займу № ${item.period_index}</span></td><td><span class="table-note">Основной долг ${rub(item.principal)}, проценты ${rub(item.interest)}, налог ${item.material_tax===null?'не рассчитан':rub(item.material_tax)}</span></td><td><a class="text-button" href="#loan">График</a></td></tr>`;}return `<tr class="${item.archived?'inactive-row':''}"><td class="date-cell">${esc(monthLabel(item.due_month))}</td><td class="num">${item.expected===null?'—':rub(item.expected)}</td><td class="num">${item.agreed===null?'—':rub(item.agreed)}</td><td class="num">${rub(item.paid)}</td><td class="num bold-num">${item.remaining===null?'Не оценено':rub(item.remaining)}</td><td>${planStatus(item)}</td><td>${esc(first)}</td><td>${esc(second)||'—'}</td><td><button class="text-button table-main" data-action="edit-plan" data-id="${item.id}">${esc(item.title)}</button></td><td><span class="table-note">${esc(item.note)||'—'}</span></td><td><button class="text-button" data-action="${item.archived?'restore-plan':'pay-plan'}" data-id="${item.id}">${item.archived?'Вернуть':'Оплатить'}</button></td></tr>`;}).join('')}</tbody></table></div>`:empty('Записи не найдены','Измените фильтры или добавьте первую оплату.','new-expense','Записать оплату')}
+  ${visible.length?`<div class="table-scroll"><table class="ledger-table"><thead><tr><th>Дата</th><th class="num">План</th><th class="num">Факт, цена</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th><th>Примечание</th><th></th></tr></thead><tbody>${visible.map(({kind,item})=>{const [first]=categoryParts(item.category_id);if(kind==='expense'){const plan=planById(item.plan_id);return `<tr class="${item.deleted?'inactive-row':''}"><td class="date-cell">${dateLabel(item.paid_on)}</td><td class="num">${plan?.expected===null||!plan?'—':rub(plan.expected)}</td><td class="num">${plan?.agreed===null||!plan?'—':rub(plan.agreed)}</td><td class="num bold-num">${rub(item.amount)}</td><td class="num">${plan?.remaining===null||!plan?'—':rub(plan.remaining)}</td><td>${item.deleted?'<span class="badge gray">Удалена</span>':'<span class="badge paid">Оплата</span>'}</td><td>${esc(first)}</td>${categoryCell('expense',item)}<td><button class="text-button table-main" data-action="edit-expense" data-id="${item.id}">${esc(item.description)}</button>${plan?`<span class="table-note">В счёт: ${esc(plan.title)}</span>`:''}</td><td><span class="table-note">${esc(item.note)||'—'}</span></td><td><button class="text-button" data-action="${item.deleted?'restore-expense':'edit-expense'}" data-id="${item.id}">${item.deleted?'Восстановить':'Изменить'}</button></td></tr>`;}if(kind==='loan'){const paid=item.payment_date<=state.today;return `<tr><td class="date-cell">${dateLabel(item.payment_date)}</td><td class="num">${rub(item.total)}</td><td class="num">${paid?rub(item.total):'—'}</td><td class="num bold-num">${paid?rub(item.total):rub(0n)}</td><td class="num">${paid?rub(0n):rub(item.total)}</td><td>${paid?'<span class="badge paid">Оплачено</span>':'<span class="badge">Запланировано</span>'}</td><td>Заём</td><td>Взнос</td><td><span class="table-main">Взнос по займу № ${item.period_index}</span></td><td><span class="table-note">Основной долг ${rub(item.principal)}, проценты ${rub(item.interest)}, налог ${item.material_tax===null?'не рассчитан':rub(item.material_tax)}</span></td><td><a class="text-button" href="#loan">График</a></td></tr>`;}return `<tr class="${item.archived?'inactive-row':''}"><td class="date-cell">${esc(monthLabel(item.due_month))}</td><td class="num">${item.expected===null?'—':rub(item.expected)}</td><td class="num">${item.agreed===null?'—':rub(item.agreed)}</td><td class="num">${rub(item.paid)}</td><td class="num bold-num">${item.remaining===null?'Не оценено':rub(item.remaining)}</td><td>${planStatus(item)}</td><td>${esc(first)}</td>${categoryCell('plan',item)}<td><button class="text-button table-main" data-action="edit-plan" data-id="${item.id}">${esc(item.title)}</button></td><td><span class="table-note">${esc(item.note)||'—'}</span></td><td><button class="text-button" data-action="${item.archived?'restore-plan':'pay-plan'}" data-id="${item.id}">${item.archived?'Вернуть':'Оплатить'}</button></td></tr>`;}).join('')}</tbody></table></div>`:empty('Записи не найдены','Измените фильтры или добавьте первую оплату.','new-expense','Записать оплату')}
   ${pagination('ledger',rows.length,state.ledgerPage,'оплачено '+rub(actual)+' · осталось '+rub(remaining))}<p class="small-summary">Сначала показаны фактические платежи и взносы по займу, затем будущие планы и взносы.</p></article>`;
 }
 function rateBadge(row) {
@@ -268,7 +333,7 @@ function renderPlans() {
 function renderCategories() {
   const roots=state.categories.filter(c=>!c.parent_id);
   const usage=c=>`${plural(c.expense_count,'оплата','оплаты','оплат')} · ${plural(c.plan_count,'план','плана','планов')}`;
-  $('#view-categories').innerHTML=`<div class="notice"><span>Категорию можно переименовать. Если она уже используется, её можно заменить на другую сразу во всех оплатах и планах.</span><button class="text-button" data-action="new-category">＋ Категория</button></div><div class="category-grid">${roots.map(c=>{const children=state.categories.filter(s=>s.parent_id===c.id);return `<article class="category-card"><h3><button class="text-button category-title" data-action="edit-category" data-id="${c.id}">${esc(c.name)}</button><span>${children.length}</span></h3><p class="category-usage">${usage(c)}</p><ul>${children.length?children.map(s=>`<li><span><strong>${esc(s.name)}</strong><small>${usage(s)}</small></span><button class="text-button" data-action="edit-category" data-id="${s.id}">Изменить</button></li>`).join(''):'<li>Можно использовать без подкатегории</li>'}</ul><div class="category-actions"><button class="text-button" data-action="new-category" data-id="${c.id}">＋ Подкатегория</button><button class="text-button" data-action="edit-category" data-id="${c.id}">Изменить группу</button></div></article>`;}).join('')}</div>${roots.length?'':empty('Пока нет категорий','Создайте основную категорию, например «Ремонт», а затем добавьте «Работы» и «Материалы».','new-category','Добавить категорию')}`;
+  $('#view-categories').innerHTML=`<div class="notice"><span>Категорию можно переименовать или удалить. Используемую категорию приложение сначала предложит заменить во всех оплатах и планах.</span><button class="text-button" data-action="new-category">＋ Категория</button></div><div class="category-grid">${roots.map(c=>{const children=state.categories.filter(s=>s.parent_id===c.id);return `<article class="category-card"><h3><button class="text-button category-title" data-action="edit-category" data-id="${c.id}">${esc(c.name)}</button><span>${children.length}</span></h3><p class="category-usage">${usage(c)}</p><ul>${children.length?children.map(s=>`<li><span><strong>${esc(s.name)}</strong><small>${usage(s)}</small></span><span class="category-item-actions"><button class="text-button" data-action="edit-category" data-id="${s.id}">Изменить</button><button class="text-button danger-text" data-action="delete-category" data-id="${s.id}">Удалить</button></span></li>`).join(''):'<li>Можно использовать без подкатегории</li>'}</ul><div class="category-actions"><button class="text-button" data-action="new-category" data-id="${c.id}">＋ Подкатегория</button><button class="text-button" data-action="edit-category" data-id="${c.id}">Изменить</button><button class="text-button danger-text" data-action="delete-category" data-id="${c.id}">Удалить</button></div></article>`;}).join('')}</div>${roots.length?'':empty('Пока нет категорий','Создайте основную категорию, например «Ремонт», а затем добавьте «Работы» и «Черновые материалы».','new-category','Добавить категорию')}`;
 }
 
 function field(id, label, input, hint = '', full = false) {
@@ -369,7 +434,7 @@ function showFormError(error) {
 }
 async function mutation(path,method,data) {
   const body=JSON.stringify(data), fingerprint=method+path+body;
-  if (!pendingRequest||pendingRequest.fingerprint!==fingerprint) pendingRequest={fingerprint,key:crypto.randomUUID()};
+  if (!pendingRequest||pendingRequest.fingerprint!==fingerprint) pendingRequest={fingerprint,key:requestKey()};
   const result=await request(path,{method,body,headers:{'Idempotency-Key':pendingRequest.key}});
   pendingRequest=null;
   return result;
@@ -404,7 +469,7 @@ async function saveForm(event) {
     await mutation(path,method,data);
     await closeEditor(true);
     notify(current.kind==='expense'?'Оплата сохранена':current.kind==='plan'?'План сохранён':current.item?'Категория переименована':'Категория добавлена');
-    try { await loadData(); } catch(error) { showError(new Error('Запись сохранена, но обновить список не удалось. Нажмите «Обновить данные». '+error.message)); }
+    try { await loadData(); } catch(error) { showError(new Error('Запись сохранена, но обновить список не удалось. Нажмите «Обновить список». '+error.message)); }
   } catch(error) {showFormError(error);}
   finally {button.disabled=false;button.textContent='Сохранить';}
 }
@@ -440,6 +505,22 @@ async function removeCategory(id) {
   }
   await closeEditor(true);await loadData();
 }
+async function applyCategorySuggestion(kind,id,categoryId) {
+  const item=(kind==='expense'?state.expenses:state.plans).find(value=>value.id===id);
+  if(!item)throw new Error('Запись не найдена. Обновите список.');
+  const data=kind==='expense'?{amount:item.amount,paid_on:item.paid_on,description:item.description,note:item.note,category_id:categoryId,plan_id:item.plan_id,version:item.version}:{title:item.title,expected:item.expected,agreed:item.agreed,due_month:item.due_month,category_id:categoryId,note:item.note,version:item.version};
+  await mutation(`/v1/${kind==='expense'?'expenses':'plans'}/${id}`,'PUT',data);
+  try{localStorage.removeItem(recommendationKey(kind,item,categoryId));}catch{}
+  notify('Категория назначена');
+  await loadData();
+}
+function dismissCategorySuggestion(kind,id,categoryId) {
+  const item=(kind==='expense'?state.expenses:state.plans).find(value=>value.id===id);
+  if(!item)return;
+  try{localStorage.setItem(recommendationKey(kind,item,categoryId),'1');}catch{}
+  renderLedger();
+  notify('Рекомендация скрыта');
+}
 function setPlanFilter(status) {
   state.ledgerFilters={search:'',category:'',month:'',type:'plan',inactive:false};
   state.ledgerPage=0;
@@ -456,7 +537,10 @@ async function handleAction(event) {
     else if (action==='new-plan') openEditor('plan');
     else if (action==='new-category') openEditor('category',id?{parent_id:id}:null);
     else if (action==='edit-category') openEditor('category',state.categories.find(c=>c.id===id));
+    else if (action==='delete-category') {openEditor('category',state.categories.find(c=>c.id===id));setTimeout(()=>$('.category-danger')?.scrollIntoView({behavior:'smooth',block:'center'}));}
     else if (action==='remove-category') {try{await removeCategory(id);}catch(error){showFormError(error);}}
+    else if (action==='accept-category') await applyCategorySuggestion(target.dataset.kind,id,target.dataset.categoryId);
+    else if (action==='dismiss-category') dismissCategorySuggestion(target.dataset.kind,id,target.dataset.categoryId);
     else if (action==='edit-expense') openEditor('expense',state.expenses.find(e=>e.id===id));
     else if (action==='edit-plan') openEditor('plan',planById(id));
     else if (action==='pay-plan') openEditor('expense',null,planById(id));
