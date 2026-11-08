@@ -268,6 +268,17 @@ def test_ledger_shows_paid_values_missing_budgets_and_filtered_balance(browser):
     assert "<th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th>" in asset
 
 
+def test_ledger_shows_cumulative_month_totals(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    css = browser.get("/assets/style.css").text
+    assert "function ledgerRows(filters=state.ledgerFilters)" in asset
+    assert "function ledgerCumulativeTotals(rows)" in asset
+    assert "ledgerRows({...f,month:''})" in asset
+    assert "На начало месяца" in asset
+    assert "month-cumulative" in css
+
+
 def test_ledger_opens_at_current_month_and_supports_bulk_plan_deadlines(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text

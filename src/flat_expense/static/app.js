@@ -284,8 +284,8 @@ function pagination(kind, count, page, totalText, pageCount = null) {
   const pages = pageCount ?? Math.max(1, Math.ceil(count / PAGE_SIZE));
   return `<div class="table-foot"><span>${plural(count,'запись','записи','записей')}${totalText ? ' · ' + totalText : ''}</span><div class="pagination"><button class="text-button" data-action="page" data-kind="${kind}" data-page="${page-1}" ${page===0?'disabled':''}>← Назад</button><span>${page+1} / ${pages}</span><button class="text-button" data-action="page" data-kind="${kind}" data-page="${page+1}" ${page+1>=pages?'disabled':''}>Далее →</button></div></div>`;
 }
-function ledgerRows() {
-  const f=state.ledgerFilters, search=f.search.toLocaleLowerCase('ru'), category=f.category2||f.category1;
+function ledgerRows(filters=state.ledgerFilters) {
+  const f=filters, search=f.search.toLocaleLowerCase('ru'), category=f.category2||f.category1;
   const expenses=state.expenses.filter(e=>(f.inactive||!e.deleted)&&categoryMatches(e,category)&&(!f.month||e.paid_on.startsWith(f.month))&&(!search||[e.description,e.note,e.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(e=>({kind:'expense',date:e.paid_on,item:e}));
   const plans=state.plans.filter(p=>(f.inactive||!p.archived)&&categoryMatches(p,category)&&(!f.month||p.due_month?.startsWith(f.month))&&(!search||[p.title,p.note,p.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(p=>({kind:'plan',date:p.due_month?.slice(0,10)||'9999-12-31',item:p}));
   const loan=state.loan.filter(row=>!category&&(!f.month||row.payment_date.startsWith(f.month))&&(!search||`займ взнос платёж ${row.period_index}`.includes(search))).map(row=>({kind:'loan',date:row.payment_date,item:row}));
@@ -415,9 +415,28 @@ function ledgerMonthTotals(rows) {
   });
   return totals;
 }
-function ledgerMonthHeader(key,total) {
+function ledgerCumulativeTotals(rows) {
+  const monthly=ledgerMonthTotals(rows), cumulative=new Map();
+  let running={plan:0n,fact:0n,paid:0n,remaining:0n};
+  [...monthly.keys()].filter(Boolean).sort().forEach(key=>{
+    const total=monthly.get(key);
+    cumulative.set(key,running);
+    running={
+      plan:running.plan+total.plan,
+      fact:running.fact+total.fact,
+      paid:running.paid+total.paid,
+      remaining:running.remaining+total.remaining,
+    };
+  });
+  return cumulative;
+}
+function monthTotal(value,cumulative) {
+  return `<strong>${rub(value)}</strong>${cumulative===undefined?'':`<small class="month-cumulative">Σ ${rub(cumulative)}</small>`}`;
+}
+function ledgerMonthHeader(key,total,cumulative) {
   const unpriced=total.unpriced?`${plural(total.unpriced,'позиция','позиции','позиций')} без оценки`:'';
-  return `<tr class="month-divider"><td></td><td><strong>${key?esc(monthLabel(key)):'Без даты'}</strong></td><td colspan="3"></td><td class="num month-total">${rub(total.plan)}</td><td class="num month-total">${rub(total.fact)}</td><td class="num month-total">${rub(total.paid)}</td><td class="num month-total">${rub(total.remaining)}</td><td class="month-status">Итого</td><td colspan="2" class="month-extra">${unpriced}</td></tr>`;
+  const cumulativeLabel=key?'<small class="month-cumulative-label">На начало месяца</small>':'';
+  return `<tr class="month-divider"><td></td><td><strong>${key?esc(monthLabel(key)):'Без даты'}</strong>${cumulativeLabel}</td><td colspan="3"></td><td class="num month-total">${monthTotal(total.plan,cumulative?.plan)}</td><td class="num month-total">${monthTotal(total.fact,cumulative?.fact)}</td><td class="num month-total">${monthTotal(total.paid,cumulative?.paid)}</td><td class="num month-total">${monthTotal(total.remaining,cumulative?.remaining)}</td><td class="month-status">Итого</td><td colspan="2" class="month-extra">${unpriced}</td></tr>`;
 }
 function ledgerRowMarkup(kind,item) {
   const [first]=categoryParts(item.category_id);
@@ -474,9 +493,10 @@ function renderLedger() {
   state.ledgerPage=Math.min(state.ledgerPage,pages.length-1);
   const visible=pages[state.ledgerPage];
   const monthly=ledgerMonthTotals(rows);
+  const cumulative=ledgerCumulativeTotals(ledgerRows({...f,month:''}));
   let previousMonth=null;
   const body=visible.map(row=>{
-    const key=ledgerMonthKey(row), header=key!==previousMonth?ledgerMonthHeader(key,monthly.get(key)):'';
+    const key=ledgerMonthKey(row), header=key!==previousMonth?ledgerMonthHeader(key,monthly.get(key),cumulative.get(key)):'';
     previousMonth=key;
     return header+ledgerRowMarkup(row.kind,row.item);
   }).join('');

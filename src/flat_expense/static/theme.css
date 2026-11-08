@@ -100,6 +100,8 @@ dialog::backdrop { background: #07100bcc; }
 .month-divider .month-total,
 .month-divider .month-status,
 .month-divider .month-extra { color: #d0e5d4; }
+.month-divider .month-cumulative,
+.month-divider .month-cumulative-label { color: #a9c8b0; }
 .ledger-bulk { background: #1e2d26; }
 
 .inline-edit:hover { background: #294436; color: #d8f0df; box-shadow: 0 0 0 2px #294436; }
