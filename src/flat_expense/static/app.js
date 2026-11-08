@@ -2,11 +2,13 @@
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const esc = (value = '') => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {categories: [], expenses: [], plans: [], loan: [], today: '', moveMonth: '2027-08', view: 'overview', ready: false, report: null, reportSequence: 0, loadSequence: 0, chartLoanMode: 'with', start: '', end: '', expensePage: 0, planPage: 0, ledgerPage: 0, ledgerAutoPosition: false, ledgerSelectedPlanIds: new Set(), expenseFilters: {search:'', category:'', month:'', deleted:false}, planFilters: {search:'', category:'', month:'', status:'', archived:false}, ledgerFilters: {search:'', category1:'', category2:'', month:'', type:'', inactive:false}};
+const state = {categories: [], expenses: [], plans: [], loan: [], today: '', moveMonth: '2027-08', view: 'overview', ready: false, report: null, reportSequence: 0, loadSequence: 0, chartLoanMode: 'with', start: '', end: '', expensePage: 0, planPage: 0, ledgerPage: 0, ledgerAutoPosition: false, ledgerSelectedPlanIds: new Set(), expenseFilters: {search:'', category:'', month:'', deleted:false}, planFilters: {search:'', category:'', month:'', status:'', archived:false}, ledgerFilters: {search:'', category1:'', category2:'', month:'', loan:false, inactive:false}};
 let editing = null;
 let pendingRequest = null;
 let toastTimer;
 const PAGE_SIZE = 15;
+const LOAN_CATEGORY_ID = '__loan__';
+const LOAN_PAYMENT_CATEGORY_ID = '__loan-payment__';
 const monthFormatter = new Intl.DateTimeFormat('ru-RU', {month:'short', year:'2-digit', timeZone:'UTC'});
 const numberFormatter = new Intl.NumberFormat('ru-RU');
 
@@ -288,8 +290,9 @@ function ledgerRows(filters=state.ledgerFilters) {
   const f=filters, search=f.search.toLocaleLowerCase('ru'), category=f.category2||f.category1;
   const expenses=state.expenses.filter(e=>(f.inactive||!e.deleted)&&categoryMatches(e,category)&&(!f.month||e.paid_on.startsWith(f.month))&&(!search||[e.description,e.note,e.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(e=>({kind:'expense',date:e.paid_on,item:e}));
   const plans=state.plans.filter(p=>(f.inactive||!p.archived)&&categoryMatches(p,category)&&(!f.month||p.due_month?.startsWith(f.month))&&(!search||[p.title,p.note,p.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(p=>({kind:'plan',date:p.due_month?.slice(0,10)||'9999-12-31',item:p}));
-  const loan=state.loan.filter(row=>!category&&(!f.month||row.payment_date.startsWith(f.month))&&(!search||`займ взнос платёж ${row.period_index}`.includes(search))).map(row=>({kind:'loan',date:row.payment_date,item:row}));
-  const rows=f.type==='expense'?expenses:f.type==='plan'?plans:f.type==='loan'?loan:[...expenses,...loan,...plans];
+  const loanCategoryMatches=(!f.category1||f.category1===LOAN_CATEGORY_ID)&&(!f.category2||f.category2===LOAN_PAYMENT_CATEGORY_ID);
+  const loan=f.loan&&loanCategoryMatches?state.loan.filter(row=>(!f.month||row.payment_date.startsWith(f.month))&&(!search||`займ взнос платёж ${row.period_index}`.includes(search))).map(row=>({kind:'loan',date:row.payment_date,item:row})):[];
+  const rows=[...expenses,...loan,...plans];
   const order={expense:0,loan:1,plan:2};
   return rows.sort((a,b)=>a.date.localeCompare(b.date)||order[a.kind]-order[b.kind]||a.item.id.localeCompare(b.item.id));
 }
@@ -379,7 +382,7 @@ function ledgerPages(rows) {
 }
 function ledgerHasDefaultFilters() {
   const f=state.ledgerFilters;
-  return !f.search&&!f.category1&&!f.category2&&!f.month&&!f.type&&!f.inactive;
+  return !f.search&&!f.category1&&!f.category2&&!f.month&&!f.loan&&!f.inactive;
 }
 function ledgerCurrentMonthPage(pages) {
   const month=state.today.slice(0,7);
@@ -415,28 +418,9 @@ function ledgerMonthTotals(rows) {
   });
   return totals;
 }
-function ledgerCumulativeTotals(rows) {
-  const monthly=ledgerMonthTotals(rows), cumulative=new Map();
-  let running={plan:0n,fact:0n,paid:0n,remaining:0n};
-  [...monthly.keys()].filter(Boolean).sort().forEach(key=>{
-    const total=monthly.get(key);
-    cumulative.set(key,running);
-    running={
-      plan:running.plan+total.plan,
-      fact:running.fact+total.fact,
-      paid:running.paid+total.paid,
-      remaining:running.remaining+total.remaining,
-    };
-  });
-  return cumulative;
-}
-function monthTotal(value,cumulative) {
-  return `<strong>${rub(value)}</strong>${cumulative===undefined?'':`<small class="month-cumulative">Σ ${rub(cumulative)}</small>`}`;
-}
-function ledgerMonthHeader(key,total,cumulative) {
+function ledgerMonthHeader(key,total) {
   const unpriced=total.unpriced?`${plural(total.unpriced,'позиция','позиции','позиций')} без оценки`:'';
-  const cumulativeLabel=key?'<small class="month-cumulative-label">На начало месяца</small>':'';
-  return `<tr class="month-divider"><td></td><td><strong>${key?esc(monthLabel(key)):'Без даты'}</strong>${cumulativeLabel}</td><td colspan="3"></td><td class="num month-total">${monthTotal(total.plan,cumulative?.plan)}</td><td class="num month-total">${monthTotal(total.fact,cumulative?.fact)}</td><td class="num month-total">${monthTotal(total.paid,cumulative?.paid)}</td><td class="num month-total">${monthTotal(total.remaining,cumulative?.remaining)}</td><td class="month-status">Итого</td><td colspan="2" class="month-extra">${unpriced}</td></tr>`;
+  return `<tr class="month-divider"><td></td><td><strong>${key?esc(monthLabel(key)):'Без даты'}</strong></td><td colspan="3"></td><td class="num month-total">${rub(total.plan)}</td><td class="num month-total">${rub(total.fact)}</td><td class="num month-total">${rub(total.paid)}</td><td class="num month-total">${rub(total.remaining)}</td><td class="month-status">Итого</td><td colspan="2" class="month-extra">${unpriced}</td></tr>`;
 }
 function ledgerRowMarkup(kind,item) {
   const [first]=categoryParts(item.category_id);
@@ -452,14 +436,14 @@ function ledgerRowMarkup(kind,item) {
   const actions=item.archived?`<button class="text-button" data-action="restore-plan" data-id="${item.id}">Вернуть</button>`:`<button class="text-button" data-action="record-plan-payment" data-id="${item.id}">Внести оплату</button><button class="text-button" data-action="edit-plan" data-id="${item.id}">Изменить</button>`;
   return `<tr class="${item.archived?'inactive-row':''}"><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
 }
-function ledgerBalance(rows) {
-  let plan=0n,fact=0n,count=0;
+function ledgerSummary(rows) {
+  let paid=0n,plan=0n;
   rows.forEach(row=>{
-    if(row.kind==='expense'&&!row.item.deleted){plan+=cents(row.item.planned_amount);fact+=cents(row.item.amount);count+=1;}
-    else if(row.kind==='loan'&&row.item.payment_date<=state.today){const amount=cents(row.item.total);plan+=amount;fact+=amount;count+=1;}
-    else if(row.kind==='plan'&&!row.item.archived&&['paid','finalized'].includes(row.item.payment_status)&&row.item.planned_amount!==null){plan+=cents(row.item.planned_amount);fact+=cents(row.item.paid_amount);count+=1;}
+    if(row.kind==='expense'){plan+=cents(row.item.planned_amount);if(row.item.paid_on<=state.today)paid+=cents(row.item.amount);}
+    else if(row.kind==='loan'){plan+=cents(row.item.total);if(row.item.payment_date<=state.today)paid+=cents(row.item.total);}
+    else {plan+=cents(row.item.planned_amount);if(row.item.paid_on&&row.item.paid_on<=state.today)paid+=cents(row.item.paid_amount);}
   });
-  return {plan,fact,difference:plan-fact,count};
+  return {paid,plan};
 }
 function ledgerBulkControls(rows) {
   const plans=selectablePlanRows(rows), selected=state.ledgerSelectedPlanIds.size;
@@ -485,7 +469,7 @@ async function bulkMovePlans() {
 function renderLedger() {
   const f=state.ledgerFilters, rows=ledgerRows();
   const roots=state.categories.filter(category=>!category.parent_id);
-  const children=state.categories.filter(category=>category.parent_id===f.category1);
+  const children=f.category1===LOAN_CATEGORY_ID?[{id:LOAN_PAYMENT_CATEGORY_ID,name:'Взнос'}]:state.categories.filter(category=>category.parent_id===f.category1);
   const pages=ledgerPages(rows);
   reconcileLedgerSelection(rows);
   if(state.ledgerAutoPosition&&ledgerHasDefaultFilters())state.ledgerPage=ledgerCurrentMonthPage(pages);
@@ -493,21 +477,18 @@ function renderLedger() {
   state.ledgerPage=Math.min(state.ledgerPage,pages.length-1);
   const visible=pages[state.ledgerPage];
   const monthly=ledgerMonthTotals(rows);
-  const cumulative=ledgerCumulativeTotals(ledgerRows({...f,month:''}));
   let previousMonth=null;
   const body=visible.map(row=>{
-    const key=ledgerMonthKey(row), header=key!==previousMonth?ledgerMonthHeader(key,monthly.get(key),cumulative.get(key)):'';
+    const key=ledgerMonthKey(row), header=key!==previousMonth?ledgerMonthHeader(key,monthly.get(key)):'';
     previousMonth=key;
     return header+ledgerRowMarkup(row.kind,row.item);
   }).join('');
-  const actual=rows.filter(r=>(r.kind==='expense'&&!r.item.deleted)||(r.kind==='plan'&&!r.item.archived)||(r.kind==='loan'&&r.item.payment_date<=state.today)).reduce((sum,r)=>sum+cents(r.kind==='expense'?r.item.amount:r.kind==='plan'?r.item.paid_amount:r.item.total),0n);
-  const remaining=rows.filter(r=>(r.kind==='plan'&&!r.item.archived)||(r.kind==='loan'&&r.item.payment_date>state.today)).reduce((sum,r)=>sum+cents(r.kind==='plan'?r.item.remaining_amount:r.item.total),0n);
-  const balance=ledgerBalance(rows),balanceClass=balance.difference>0n?'saving':balance.difference<0n?'overrun':'neutral',balanceText=balance.difference>0n?`Экономия ${rub(balance.difference)}`:balance.difference<0n?`Перерасход ${rub(-balance.difference)}`:'Точно по плану';
-  $('#view-ledger').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="ledger-search">Поиск</label><input id="ledger-search" type="search" placeholder="Найти оплату или план" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="ledger-category1">Категория 1</label><select id="ledger-category1" aria-label="Категория 1"><option value="">Все категории 1</option>${roots.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category1?'selected':''}>${esc(category.name)}</option>`).join('')}</select><label class="screen-reader" for="ledger-category2">Категория 2</label><select id="ledger-category2" aria-label="Категория 2" ${f.category1?'':'disabled'}><option value="">Все категории 2</option>${children.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category2?'selected':''}>${esc(category.name)}</option>`).join('')}</select><label class="screen-reader" for="ledger-type">Тип</label><select id="ledger-type"><option value="" ${!f.type?'selected':''}>Все расходы</option><option value="expense" ${f.type==='expense'?'selected':''}>Только оплаты</option><option value="plan" ${f.type==='plan'?'selected':''}>Только планы</option><option value="loan" ${f.type==='loan'?'selected':''}>Только заём</option></select><label class="screen-reader" for="ledger-month">Месяц</label><input id="ledger-month" type="month" value="${f.month}"><label class="filter-label"><input type="checkbox" id="ledger-inactive" ${f.inactive?'checked':''}>Показать удалённые и архивные</label></div>
+  const summary=ledgerSummary(rows);
+  $('#view-ledger').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="ledger-search">Поиск</label><input id="ledger-search" type="search" placeholder="Найти оплату или план" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="ledger-category1">Категория 1</label><select id="ledger-category1" aria-label="Категория 1"><option value="">Все категории 1</option>${roots.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category1?'selected':''}>${esc(category.name)}</option>`).join('')}<option value="${LOAN_CATEGORY_ID}" ${f.category1===LOAN_CATEGORY_ID?'selected':''}>Заём</option></select><label class="screen-reader" for="ledger-category2">Категория 2</label><select id="ledger-category2" aria-label="Категория 2" ${f.category1?'':'disabled'}><option value="">Все категории 2</option>${children.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category2?'selected':''}>${esc(category.name)}</option>`).join('')}</select><label class="filter-label"><input type="checkbox" id="ledger-loan" ${f.loan?'checked':''}>＋ заём</label><label class="screen-reader" for="ledger-month">Месяц</label><input id="ledger-month" type="month" value="${f.month}"><label class="filter-label"><input type="checkbox" id="ledger-inactive" ${f.inactive?'checked':''}>Показать удалённые и архивные</label></div>
   ${ledgerBulkControls(rows)}
-  <div class="ledger-balance ${balanceClass}"><span>Баланс завершённых позиций</span>${balance.count?`<strong>${balanceText}</strong><small>План ${rub(balance.plan)} − Факт ${rub(balance.fact)} · ${plural(balance.count,'сопоставимая позиция','сопоставимые позиции','сопоставимых позиций')}</small>`:'<strong>Пока нет завершённых позиций</strong><small>Открытые и частично оплаченные планы в экономию не включаются.</small>'}</div>
+  <div class="ledger-summary"><div><span>Итоги отображённых строк</span><small>${f.loan?'С учётом взносов по займу':'Без взносов по займу'}</small></div><div><span>Оплачено до сегодня</span><strong>${rub(summary.paid)}</strong></div><div><span>План</span><strong>${rub(summary.plan)}</strong></div></div>
   ${visible.length?`<div class="table-scroll"><table class="ledger-table"><thead><tr><th><span class="screen-reader">Выбрать план</span></th><th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th><th class="num">План</th><th class="num">Факт, цена</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th>Примечание</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`:empty('Записи не найдены','Измените фильтры или добавьте первую оплату.','new-expense','Записать оплату')}
-  ${pagination('ledger',rows.length,state.ledgerPage,'оплачено '+rub(actual)+' · осталось запланировать '+rub(remaining),pages.length)}<p class="small-summary">Все строки отсортированы по возрастанию даты. Страница заканчивается только между месяцами, поэтому число строк на странице может отличаться. В заголовке каждого месяца показаны суммы оплат и остатка открытых планов. Оплата выбранного плана обновляет его строку.</p></article>`;
+  ${pagination('ledger',rows.length,state.ledgerPage,'оплачено до сегодня '+rub(summary.paid)+' · план '+rub(summary.plan),pages.length)}<p class="small-summary">Все строки отсортированы по возрастанию даты. Страница заканчивается только между месяцами, поэтому число строк на странице может отличаться. В заголовке каждого месяца показаны суммы оплат и остатка открытых планов. Оплата выбранного плана обновляет его строку.</p></article>`;
 }
 function rateBadge(row) {
   const labels={actual:'Факт ЦБ',forecast:'Прогноз',manual:'Вручную',imported:'Из Excel',missing:'Нет ставки'};
@@ -789,7 +770,7 @@ function dismissCategorySuggestion(kind,id,categoryId) {
   notify('Рекомендация скрыта');
 }
 function setPlanFilter(status) {
-  state.ledgerFilters={search:'',category1:'',category2:'',month:'',type:'plan',inactive:false};
+  state.ledgerFilters={search:'',category1:'',category2:'',month:'',loan:false,inactive:false};
   state.ledgerPage=0;
   location.hash='ledger';
   navigate('ledger');
@@ -846,7 +827,7 @@ async function handleAction(event) {
 let searchTimer;
 function updateFilter(event) {
   const id=event.target.id;
-  const ledger=id.match(/^ledger-(search|category1|category2|month|type|inactive)$/);
+  const ledger=id.match(/^ledger-(search|category1|category2|month|loan|inactive)$/);
   if(ledger){const key=ledger[1];state.ledgerFilters[key]=event.target.type==='checkbox'?event.target.checked:event.target.value;if(key==='category1')state.ledgerFilters.category2='';state.ledgerSelectedPlanIds.clear();state.ledgerPage=0;const restore=()=>{const selection=event.target.selectionStart,active=document.activeElement===event.target;renderLedger();if(active){const replacement=document.getElementById(id);replacement.focus();if(replacement.type==='search')replacement.setSelectionRange(selection,selection);}};clearTimeout(searchTimer);if(key==='search')searchTimer=setTimeout(restore,220);else restore();return true;}
   const matches=id.match(/^(expense|plan)-(search|category|month|deleted|archived|status)$/);
   if (!matches) return false;

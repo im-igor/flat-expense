@@ -252,7 +252,7 @@ def test_ledger_has_dependent_category_filters(browser):
     assert "if(key==='category1')state.ledgerFilters.category2=''" in asset
 
 
-def test_ledger_shows_paid_values_missing_budgets_and_filtered_balance(browser):
+def test_ledger_shows_paid_values_missing_budgets_and_filtered_summary(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text
     assert (
@@ -262,21 +262,24 @@ def test_ledger_shows_paid_values_missing_budgets_and_filtered_balance(browser):
     assert "planned_amount:moneyInput($('#planned_amount').value)||moneyInput($('#amount').value,true)" in asset
     assert "if(!plannedTouched)planned.value=amount.value" in asset
     assert "budget-missing-cell" in asset
-    assert "function ledgerBalance(rows)" in asset
-    assert "Баланс завершённых позиций" in asset
-    assert "План ${rub(balance.plan)} − Факт ${rub(balance.fact)}" in asset
+    assert "function ledgerSummary(rows)" in asset
+    assert "Оплачено до сегодня" in asset
+    assert "Итоги отображённых строк" in asset
+    assert 'id="ledger-loan"' in asset
+    assert "LOAN_CATEGORY_ID" in asset
+    assert "ledger-type" not in asset
     assert "<th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th>" in asset
 
 
-def test_ledger_shows_cumulative_month_totals(browser):
+def test_ledger_removes_cumulative_month_totals(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text
     css = browser.get("/assets/style.css").text
     assert "function ledgerRows(filters=state.ledgerFilters)" in asset
-    assert "function ledgerCumulativeTotals(rows)" in asset
-    assert "ledgerRows({...f,month:''})" in asset
-    assert "На начало месяца" in asset
-    assert "month-cumulative" in css
+    assert "function ledgerCumulativeTotals(rows)" not in asset
+    assert "На начало месяца" not in asset
+    assert "month-cumulative" not in css
+    assert "ledger-summary" in css
 
 
 def test_ledger_opens_at_current_month_and_supports_bulk_plan_deadlines(browser):

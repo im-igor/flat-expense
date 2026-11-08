@@ -100,8 +100,6 @@ dialog::backdrop { background: #07100bcc; }
 .month-divider .month-total,
 .month-divider .month-status,
 .month-divider .month-extra { color: #d0e5d4; }
-.month-divider .month-cumulative,
-.month-divider .month-cumulative-label { color: #a9c8b0; }
 .ledger-bulk { background: #1e2d26; }
 
 .inline-edit:hover { background: #294436; color: #d8f0df; box-shadow: 0 0 0 2px #294436; }
@@ -118,7 +116,12 @@ dialog::backdrop { background: #07100bcc; }
 .month-divider .month-total { color: #d0e5d4; }
 .upcoming-month-head { background: #1b2420; }
 .budget-missing-cell { background: #3d311b !important; box-shadow: inset 3px 0 #d5ae62; }
-.ledger-balance { background: #1d2a24; }
+.ledger-summary { background: #42634e; border-color: #42634e; }
+.ledger-summary > div { background: #1d2f25; }
+.ledger-summary > div:first-child { background: #294436; }
+.ledger-summary span,
+.ledger-summary small { color: #bad0bf; }
+.ledger-summary strong { color: #edf6ef; }
 
 .login-page { background: #101613; color: var(--ink); }
 .login-card { background: #19211e; border-color: #405047; box-shadow: 0 18px 55px #00000066; }
