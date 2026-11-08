@@ -32,7 +32,7 @@ async def run():
         bot,
         httpx.AsyncClient(
             base_url=config.api_base_url,
-            timeout=40,
+            timeout=120,
             headers={"Authorization": "Bearer " + config.api_token.get_secret_value()},
         ) as api,
     ):
@@ -63,11 +63,15 @@ async def run():
         response = await api.get("/internal/telegram/cursor")
         response.raise_for_status()
         offset = response.json()["offset"]
+        connected = False
         while True:
             try:
                 updates = await bot.get_updates(
                     offset=offset, timeout=25, allowed_updates=["message", "callback_query"]
                 )
+                if not connected:
+                    log.info("Telegram polling работает; соединение с API проверено.")
+                    connected = True
                 for update in updates:
                     result = await api.post(
                         "/internal/telegram/update",

@@ -13,11 +13,24 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_api_root: str = "https://api.telegram.org"
     api_base_url: str = "http://api:8000"
+    expense_ai_enabled: bool = False
+    expense_ai_url: str = "http://expense-ai:11434"
+    expense_ai_model: str = "embeddinggemma:300m-qat-q8_0"
+    expense_ai_timeout: float = Field(default=90, ge=1, le=100)
+    expense_ai_min_similarity: float = Field(default=0.32, ge=0, le=1)
+    expense_ai_min_margin: float = Field(default=0.025, ge=0, le=1)
     web_enabled: bool = False
     web_owner_id: int | None = Field(default=None, gt=0)
     web_public: bool = False
     web_password_hash: SecretStr | None = None
     web_allowed_hosts: str = "localhost,127.0.0.1,::1"
+
+    @field_validator("expense_ai_url")
+    @classmethod
+    def local_ai_url(cls, value):
+        from flat_expense.expense_ai import validate_local_url
+
+        return validate_local_url(value)
 
     @field_validator("web_owner_id", mode="before")
     @classmethod

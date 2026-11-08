@@ -396,6 +396,20 @@ def update_plan(db: Session, owner: int, identifier: str, data: PlanIn, version:
     return result
 
 
+def bulk_move_plan_due_month(db: Session, owner: int, identifiers: list[str], due_month: date):
+    items = [owned(db, Plan, owner, identifier, lock=True) for identifier in sorted(identifiers)]
+    archived = next((item for item in items if item.archived), None)
+    if archived:
+        raise DomainError("Сначала восстановите архивный план, чтобы изменить его срок.", 409)
+    for item in items:
+        before = plan_view(db, item)
+        item.due_month = due_month
+        item.version += 1
+        db.flush()
+        audit(db, owner, "plan", item.id, "bulk_move_due_month", before, plan_view(db, item))
+    return {"updated": len(items), "due_month": due_month.isoformat()}
+
+
 def toggle_plan(db: Session, owner: int, identifier: str, version: int, archived: bool):
     item = owned(db, Plan, owner, identifier, lock=True)
     if item.version != version:

@@ -265,6 +265,18 @@ def test_ledger_shows_paid_values_missing_budgets_and_filtered_balance(browser):
     assert "<th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th>" in asset
 
 
+def test_ledger_opens_at_current_month_and_supports_bulk_plan_deadlines(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert "function ledgerCurrentMonthPage(pages)" in asset
+    assert "state.ledgerAutoPosition&&ledgerHasDefaultFilters()" in asset
+    assert "data-action=\"select-filtered-plans\"" in asset
+    assert "data-action=\"bulk-move-plans\"" in asset
+    assert "/v1/plans/bulk-due-month" in asset
+    assert "data-action=\"record-plan-payment\"" in asset
+    assert "Точная дата оплаты" in asset
+
+
 def test_overview_focuses_on_current_and_next_month_plans(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text

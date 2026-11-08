@@ -11,6 +11,7 @@ from flat_expense import service as s
 from flat_expense.config import Settings, settings
 from flat_expense.conversation import process_update
 from flat_expense.db import make_sessions
+from flat_expense.expense_ai import LocalExpenseAI
 from flat_expense.models import BotCursor, Expense, Plan
 from flat_expense.schemas import (
     CategoryIn,
@@ -19,6 +20,7 @@ from flat_expense.schemas import (
     ExpenseEdit,
     ExpenseIn,
     LoanRateIn,
+    PlanDueMonthBulkEdit,
     PlanEdit,
     PlanIn,
     VersionIn,
@@ -33,6 +35,7 @@ def create_app(config: Settings | None = None, sessions=None):
         title="Flat Expense", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None
     )
     app.state.sessions = sessions
+    app.state.expense_ai = LocalExpenseAI(config) if config.expense_ai_enabled else None
     auth = HTTPBearer(auto_error=False)
 
     def authorize(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(auth)]):
@@ -239,6 +242,21 @@ def create_app(config: Settings | None = None, sessions=None):
             lambda: s.update_plan(db, owner, identifier, data, data.version),
         )
 
+    @app.post("/v1/plans/bulk-due-month")
+    def bulk_move_plans(
+        data: PlanDueMonthBulkEdit,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "plan.bulk_due_month", **data.model_dump(mode="json")},
+            lambda: s.bulk_move_plan_due_month(db, owner, data.ids, data.due_month),
+        )
+
     @app.delete("/v1/plans/{identifier}")
     def delete_plan(
         identifier: str,
@@ -314,7 +332,7 @@ def create_app(config: Settings | None = None, sessions=None):
 
     @app.post("/internal/telegram/update", dependencies=[Depends(authorize)])
     def telegram(update: dict, db=Depends(session)):
-        return process_update(db, config.allowed_ids, update)
+        return process_update(db, config.allowed_ids, update, ai=app.state.expense_ai)
 
     @app.get("/internal/telegram/cursor", dependencies=[Depends(authorize)])
     def cursor(db=Depends(session)):

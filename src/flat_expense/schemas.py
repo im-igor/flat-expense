@@ -65,6 +65,23 @@ class PlanEdit(PlanIn):
     version: int = Field(ge=1)
 
 
+class PlanDueMonthBulkEdit(Input):
+    ids: list[str] = Field(min_length=1, max_length=500)
+    due_month: date
+
+    @field_validator("ids")
+    @classmethod
+    def unique_ids(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("Каждый план можно выбрать только один раз.")
+        return value
+
+    @field_validator("due_month")
+    @classmethod
+    def first_day(cls, value):
+        return value.replace(day=1)
+
+
 class LoanRateIn(Input):
     key_rate: Decimal = Field(ge=0, le=100, max_digits=7, decimal_places=4)
     effective_on: date | None = None

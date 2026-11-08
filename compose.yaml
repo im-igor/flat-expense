@@ -12,6 +12,10 @@ x-app: &app
     WEB_PUBLIC: ${WEB_PUBLIC:-false}
     WEB_PASSWORD_HASH: ${WEB_PASSWORD_HASH:-}
     WEB_ALLOWED_HOSTS: ${WEB_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}
+    EXPENSE_AI_ENABLED: ${EXPENSE_AI_ENABLED:-false}
+    EXPENSE_AI_URL: http://expense-ai:11434
+    EXPENSE_AI_MODEL: ${EXPENSE_AI_MODEL:-embeddinggemma:300m-qat-q8_0}
+    EXPENSE_AI_TIMEOUT: ${EXPENSE_AI_TIMEOUT:-90}
   init: true
   security_opt:
     - no-new-privileges:true
@@ -26,6 +30,29 @@ x-app: &app
       max-file: "3"
 
 services:
+  expense-ai:
+    image: ollama/ollama:0.13.5
+    profiles: [ai]
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_CONTEXT_LENGTH: "2048"
+      OLLAMA_KEEP_ALIVE: 15m
+    volumes:
+      - expense-ai-models:/root/.ollama
+    # Only the internal Docker network can reach inference; no host port is published.
+    mem_limit: 1000m
+    memswap_limit: 1300m
+    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
   db:
     image: postgres:17-bookworm
     environment:
@@ -81,4 +108,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  expense-ai-models:
   postgres-data:

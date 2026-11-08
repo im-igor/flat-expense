@@ -194,6 +194,55 @@ def test_expense_plan_and_paid_amount_are_independent(client, headers, category)
     assert legacy["amount"] == "118565.00"
 
 
+def test_bulk_move_plan_due_month_updates_selected_active_plans(client, headers, category, sessions):
+    first = make_plan(client, headers, category, key="bulk-first", due_month="2027-06-01")
+    second = make_plan(client, headers, category, key="bulk-second", due_month="2027-07-01")
+
+    response = post(
+        client,
+        headers,
+        "/v1/plans/bulk-due-month",
+        "bulk-move",
+        {"ids": [first["id"], second["id"]], "due_month": "2027-09-19"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"updated": 2, "due_month": "2027-09-01"}
+    assert client.get(f"/v1/plans/{first['id']}", headers=headers).json()["due_month"] == "2027-09-01"
+    assert client.get(f"/v1/plans/{second['id']}", headers=headers).json()["due_month"] == "2027-09-01"
+    with sessions() as db:
+        actions = db.scalars(select(Audit.action).where(Audit.action == "bulk_move_due_month")).all()
+        assert actions == ["bulk_move_due_month", "bulk_move_due_month"]
+
+
+def test_bulk_move_plan_due_month_rejects_archived_plan_without_partial_update(
+    client, headers, category
+):
+    active = make_plan(client, headers, category, key="bulk-active", due_month="2027-06-01")
+    archived = make_plan(client, headers, category, key="bulk-archived", due_month="2027-07-01")
+    assert (
+        post(
+            client,
+            headers,
+            f"/v1/plans/{archived['id']}/archive",
+            "archive-before-bulk",
+            {"version": archived["version"]},
+        ).status_code
+        == 200
+    )
+
+    response = post(
+        client,
+        headers,
+        "/v1/plans/bulk-due-month",
+        "bulk-archived",
+        {"ids": [active["id"], archived["id"]], "due_month": "2027-09-01"},
+    )
+
+    assert response.status_code == 409
+    assert client.get(f"/v1/plans/{active['id']}", headers=headers).json()["due_month"] == "2027-06-01"
+
+
 def test_new_expense_initializes_plan_once_from_fact(client, headers, category):
     expense = make_expense(client, headers, category, amount="118565.00")
     assert expense["planned_amount"] == "118565.00"

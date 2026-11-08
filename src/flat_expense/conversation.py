@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from flat_expense import service as s
+from flat_expense.expense_ai import AIUnavailable
 from flat_expense.models import Category, Draft, Expense, Plan
 from flat_expense.schemas import ExpenseIn, PlanIn
 
@@ -47,8 +48,9 @@ def plan_card(item):
 
 
 class Conversation:
-    def __init__(self, db, owner):
+    def __init__(self, db, owner, ai=None):
         self.db, self.owner = db, owner
+        self.ai = ai
         self.draft = db.scalar(select(Draft).where(Draft.owner_id == owner).with_for_update())
         if self.draft is None:
             self.draft = Draft(owner_id=owner, data={})
@@ -64,12 +66,24 @@ class Conversation:
         self.data = {}
         self.draft.data = {}
 
+    def ensure_categories(self):
+        if (
+            self.db.scalar(select(Category.id).where(Category.owner_id == self.owner).limit(1))
+            is None
+        ):
+            s.seed_categories(self.db, self.owner)
+
     def cb(self, label, value):
         return button(label, f"d:{self.data['nonce']}:{value}")
 
     def home(self):
         return message(
-            "Учёт расходов на квартиру\n\nКаждая оплата хранится отдельно. План и фактическая цена покупки не считаются оплатой.\n\n/expense — расход\n/plan — будущая покупка\n/expenses — последние расходы\n/plans — будущие планы\n/month — текущий месяц (или /month 2027-06)\n/forecast — прогноз\n/undated — планы без даты\n/deleted — удалённые расходы\n/archive — архив планов\n/categories — категории\n/cancel — отменить ввод",
+            (
+                "Можно написать одной фразой: «Вчера оплатил штукатурку 3 731,15 ₽». ИИ предложит категорию; перед записью проверьте карточку.\n\n"
+                if self.ai
+                else ""
+            )
+            + "Учёт расходов на квартиру\n\nКаждая оплата хранится отдельно. План и фактическая цена покупки не считаются оплатой.\n\n/expense — расход\n/plan — будущая покупка\n/expenses — последние расходы\n/plans — будущие планы\n/month — текущий месяц (или /month 2027-06)\n/forecast — прогноз\n/undated — планы без даты\n/deleted — удалённые расходы\n/archive — архив планов\n/categories — категории\n/cancel — отменить ввод",
             [
                 [button("Записать расход", "new:expense"), button("Добавить план", "new:plan")],
                 [button("Расходы", "list:expenses:0"), button("Планы", "list:plans:0")],
@@ -85,6 +99,61 @@ class Conversation:
         }
         self.save()
         return self.prompt()
+
+    def quick_expense(self, text):
+        if not self.ai:
+            return message("Быстрый ввод с ИИ пока не подключён. /expense — пошаговая запись.")
+        if not text.strip() or len(text) > 4000:
+            return message("Опишите одну оплату сообщением до 4000 символов.")
+        self.ensure_categories()
+        try:
+            result = self.ai.suggest(text, s.categories(self.db, self.owner), s.today())
+        except AIUnavailable:
+            return message(
+                "ИИ сейчас не смог разобрать сообщение. Расход не записан. Повторите сообщение или используйте /expense для пошагового ввода."
+            )
+        if not result["is_expense"]:
+            return message(
+                "Не удалось выделить одну фактическую оплату. Напишите сумму и за что заплатили; каждую оплату — отдельным сообщением. Для будущей покупки есть /plan."
+            )
+        self.data = {
+            "mode": "expense",
+            "quick": True,
+            "step": "confirm",
+            "values": result["values"],
+            "ai_suggested": True,
+        }
+        return self.next_missing()
+
+    def next_missing(self):
+        values = self.data["values"]
+        for field in ("amount", "paid_on", "description", "category_id"):
+            if not values.get(field):
+                return self.advance("category" if field == "category_id" else field)
+        return self.advance("confirm")
+
+    def suggest_category(self):
+        """Wizard fallback stays usable even when inference is down."""
+        if self.ai:
+            v = self.data["values"]
+            try:
+                result = self.ai.suggest(
+                    f"Оплачено {v['amount']} рублей {v['paid_on']} за {v['description']}. {v.get('note', '')}",
+                    s.categories(self.db, self.owner),
+                    s.today(),
+                )
+                category_id = result["values"].get("category_id")
+                if result["is_expense"] and category_id:
+                    s.owned(self.db, Category, self.owner, category_id)
+                    self.data["values"]["category_id"] = category_id
+                    self.data["ai_suggested"] = True
+                    return self.advance("confirm")
+            except AIUnavailable:
+                pass
+        reply = self.advance("category")
+        if self.ai:
+            reply["text"] = "ИИ не предложил категорию. Выберите её вручную.\n" + reply["text"]
+        return reply
 
     def prompt(self):
         step, v = self.data["step"], self.data["values"]
@@ -132,11 +201,24 @@ class Conversation:
             if self.data["mode"].endswith("expense"):
                 planned = v.get("planned_amount") or v["amount"]
                 text = f"Сохранить расход?\n{v['description']}\nПлан: {rub(planned)}\nОплачено: {rub(v['amount'])} · {v['paid_on']}\n{cat}\n{v.get('note', '')}"
+                if self.data.get("ai_suggested"):
+                    text += "\n\nЧерновик подготовлен с ИИ. Проверьте сумму, дату и категорию."
             else:
                 text = f"Сохранить план?\n{v['title']}\n{cat}\nПлан: {rub(v.get('expected'))}\nФактическая цена: {rub(v.get('agreed'))}\nМесяц: {(v.get('due_month') or 'без даты')[:7]}\n{v.get('note', '')}"
-            return message(
-                text, [[self.cb("Подтвердить", "confirm"), self.cb("Отменить", "cancel")]]
-            )
+            rows = [[self.cb("Подтвердить", "confirm"), self.cb("Отменить", "cancel")]]
+            if self.data["mode"].endswith("expense"):
+                rows += [
+                    [
+                        self.cb("Изменить сумму", "change:amount"),
+                        self.cb("Изменить дату", "change:paid_on"),
+                    ],
+                    [
+                        self.cb("Изменить описание", "change:description"),
+                        self.cb("Изменить категорию", "change:category"),
+                    ],
+                    [self.cb("Изменить примечание", "change:note")],
+                ]
+            return message(text, rows)
         rows.append([self.cb("Отменить ввод", "cancel")])
         return message(prompts[step], rows)
 
@@ -162,13 +244,15 @@ class Conversation:
             self.data["parent"] = c.id
             return self.advance("subcategory")
         self.data["values"]["category_id"] = c.id
+        if self.data.pop("review_field", False) or self.data.get("quick"):
+            return self.next_missing()
         if self.data["mode"].startswith("edit"):
             return self.advance("confirm")
         return self.advance("confirm" if self.data["mode"] == "expense" else "note")
 
     def input(self, text):
         if not self.data:
-            return self.home()
+            return self.quick_expense(text) if self.ai else self.home()
         text = text.strip()
         step, v = self.data["step"], dict(self.data["values"])
         if step in ("amount", "planned_amount", "expected", "agreed"):
@@ -190,8 +274,12 @@ class Conversation:
         else:
             return self.prompt()
         self.data["values"] = v
+        if self.data.pop("review_field", False) or self.data.get("quick"):
+            return self.next_missing()
         if self.data["mode"].startswith("edit"):
             return self.advance("confirm")
+        if step == "note" and self.data["mode"] == "expense":
+            return self.suggest_category()
         next_step = {
             "amount": "paid_on",
             "paid_on": "description",
@@ -345,13 +433,17 @@ class Conversation:
         cmd = parts[0].split("@")[0].lower()
         arg = parts[1] if len(parts) == 2 else ""
         if cmd in ("/start", "/help"):
-            s.seed_categories(self.db, self.owner)
+            self.ensure_categories()
+            if self.data:
+                return self.prompt()
             return self.home()
         if cmd == "/cancel":
             self.clear()
             return message("Ввод отменён. /start — меню.")
         if cmd in ("/expense", "/plan"):
-            s.seed_categories(self.db, self.owner)
+            self.ensure_categories()
+            if cmd == "/expense" and arg:
+                return self.quick_expense(arg)
             return self.start(cmd[1:])
         if cmd in ("/expenses", "/plans", "/deleted", "/archive"):
             return self.listing(cmd[1:])
@@ -388,6 +480,12 @@ class Conversation:
                 return message("Ввод отменён.")
             if action == "confirm" and step == "confirm":
                 return self.confirm()
+            if action == "change" and step == "confirm" and self.data["mode"].endswith("expense"):
+                field = parts[3]
+                if field in ("amount", "paid_on", "description", "category", "note"):
+                    self.data["review_field"] = True
+                    self.data.pop("parent", None)
+                    return self.advance(field)
             if action == "today" and step == "paid_on":
                 return self.input("сегодня")
             if action == "skip" and step in ("expected", "agreed", "due_month", "note"):
@@ -402,7 +500,7 @@ class Conversation:
                 return self.prompt()
             return self.prompt()
         if parts[0] == "new" and parts[1] in ("expense", "plan"):
-            s.seed_categories(self.db, self.owner)
+            self.ensure_categories()
             return self.start(parts[1])
         if parts[0] == "ve":
             return self.show_expense(parts[1])
@@ -441,7 +539,7 @@ class Conversation:
         return self.home()
 
 
-def process_update(db, allowed_ids, update):
+def process_update(db, allowed_ids, update, ai=None):
     callback = update.get("callback_query")
     msg = callback.get("message", {}) if callback else update.get("message", {})
     actor = callback.get("from", {}) if callback else msg.get("from", {})
@@ -453,7 +551,7 @@ def process_update(db, allowed_ids, update):
         raise s.DomainError("Отсутствует update_id.")
 
     def run():
-        conversation = Conversation(db, owner)
+        conversation = Conversation(db, owner, ai=ai)
         try:
             if callback:
                 reply = conversation.callback(callback.get("data", ""))
