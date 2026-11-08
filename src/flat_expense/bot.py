@@ -83,7 +83,9 @@ async def run():
                 for update in updates:
                     result = await api.post(
                         "/internal/telegram/update",
-                        json=update.model_dump(mode="json", exclude_none=True),
+                        json=update.model_dump(
+                            mode="json", by_alias=True, exclude_none=True
+                        ),
                     )
                     result.raise_for_status()
                     payload = result.json()
