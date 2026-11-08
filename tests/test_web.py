@@ -57,6 +57,9 @@ def test_root_issues_scoped_cookie_without_service_credential(browser):
     assert browser.get("/assets/style.css").status_code == 200
     assert browser.get("/assets/editor.css").status_code == 200
     assert browser.get("/assets/overview.css").status_code == 200
+    assert browser.get("/assets/theme.css").status_code == 200
+    assert 'id="theme-toggle"' in page.text
+    assert "initTheme" in browser.get("/assets/app.js").text
     assert browser.get("/assets/.env").status_code == 404
     assert browser.get("/openapi.json").status_code == 401
     assert browser.get("/internal/telegram/cursor").status_code == 401

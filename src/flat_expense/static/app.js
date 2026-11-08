@@ -30,6 +30,32 @@ function initSidebar() {
   });
 }
 
+function initTheme() {
+  const storageKey = 'flat-expense.theme';
+  const toggle = $('#theme-toggle');
+  const stylesheet = $('#theme-stylesheet');
+  const label = $('#theme-toggle-label');
+  const icon = $('#theme-toggle-icon');
+  const apply = theme => {
+    const dark = theme === 'dark';
+    stylesheet.disabled = !dark;
+    document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+    toggle.setAttribute('aria-pressed', String(dark));
+    const text = dark ? 'Светлая тема' : 'Тёмная тема';
+    label.textContent = text;
+    icon.textContent = dark ? '☀' : '◐';
+    toggle.title = 'Включить ' + text.toLocaleLowerCase('ru');
+  };
+  let theme = 'dark';
+  try { theme = localStorage.getItem(storageKey) === 'light' ? 'light' : 'dark'; } catch { /* Default to dark. */ }
+  apply(theme);
+  toggle.addEventListener('click', () => {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    apply(theme);
+    try { localStorage.setItem(storageKey, theme); } catch { /* Keep the switch usable without storage. */ }
+  });
+}
+
 function cents(value) {
   if (value === null || value === undefined || value === '') return 0n;
   const [whole, fraction = ''] = String(value).split('.');
@@ -854,4 +880,5 @@ async function start() {
   } catch(error){$('#loading').classList.add('hidden');showError(error);}
 }
 initSidebar();
+initTheme();
 start();

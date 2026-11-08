@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="dark">
   <title>Квартира — расходы и планы</title>
   <link rel="stylesheet" href="/assets/style.css">
   <link rel="stylesheet" href="/assets/editor.css">
   <link rel="stylesheet" href="/assets/overview.css">
+  <link rel="stylesheet" href="/assets/theme.css" id="theme-stylesheet">
+  <script>try{if(localStorage.getItem('flat-expense.theme')==='light'){document.getElementById('theme-stylesheet').disabled=true;document.documentElement.style.colorScheme='light';}}catch{}</script>
   <script src="/assets/app.js" defer></script>
 </head>
 <body class="app-shell sidebar-collapsed">
@@ -26,7 +28,7 @@
   <main id="main" tabindex="-1">
     <header class="page-header">
       <div><p class="eyebrow">РАСХОДЫ НА КВАРТИРУ</p><h1 id="page-title">Обзор</h1><p id="page-subtitle" class="muted">Понимать, сколько уже потрачено и что ещё впереди.</p></div>
-      <div class="header-actions"><button class="button secondary" data-action="new-plan">Запланировать</button><button class="button primary" data-action="new-expense"><span aria-hidden="true">＋</span> Записать оплату</button></div>
+      <div class="header-actions"><button class="button secondary theme-toggle" id="theme-toggle" type="button" aria-pressed="true" title="Включить светлую тему"><span id="theme-toggle-icon" aria-hidden="true">☀</span><span id="theme-toggle-label">Светлая тема</span></button><button class="button secondary" data-action="new-plan">Запланировать</button><button class="button primary" data-action="new-expense"><span aria-hidden="true">＋</span> Записать оплату</button></div>
     </header>
     <div id="global-error" class="notice error hidden" role="alert"></div>
     <div id="loading" class="loading" role="status"><span class="spinner"></span>Загружаю ваш учёт…</div>
