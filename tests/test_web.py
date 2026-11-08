@@ -260,7 +260,7 @@ def test_ledger_shows_paid_values_missing_budgets_and_filtered_balance(browser):
     assert "if(!plannedTouched)planned.value=amount.value" in asset
     assert "budget-missing-cell" in asset
     assert "function ledgerBalance(rows)" in asset
-    assert "Баланс по текущим фильтрам" in asset
+    assert "Баланс завершённых позиций" in asset
     assert "План ${rub(balance.plan)} − Факт ${rub(balance.fact)}" in asset
     assert "<th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th>" in asset
 
