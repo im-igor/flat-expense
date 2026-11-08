@@ -106,8 +106,9 @@ class Conversation:
         if not text.strip() or len(text) > 4000:
             return message("Опишите одну оплату сообщением до 4000 символов.")
         self.ensure_categories()
+        plans = s.list_plans(self.db, self.owner, limit=100)
         try:
-            result = self.ai.suggest(text, s.categories(self.db, self.owner), s.today())
+            result = self.ai.suggest(text, s.categories(self.db, self.owner), s.today(), plans)
         except AIUnavailable:
             return message(
                 "ИИ сейчас не смог разобрать сообщение. Расход не записан. Повторите сообщение или используйте /expense для пошагового ввода."
@@ -122,8 +123,33 @@ class Conversation:
             "step": "confirm",
             "values": result["values"],
             "ai_suggested": True,
+            "plan_suggestions": result.get("plan_suggestions", []),
         }
         return self.next_missing()
+
+    def suggested_plans(self):
+        """Read suggestions again so archived or removed plans never appear in a draft."""
+        result = []
+        for identifier in self.data.get("plan_suggestions", []):
+            if not isinstance(identifier, str):
+                continue
+            plan = self.db.get(Plan, identifier)
+            if plan and plan.owner_id == self.owner and not plan.archived:
+                result.append(plan)
+        return result
+
+    def use_plan_suggestion(self, identifier):
+        if identifier not in self.data.get("plan_suggestions", []):
+            raise s.DomainError("Этот вариант больше неактуален.")
+        plan = s.owned(self.db, Plan, self.owner, identifier)
+        if plan.archived:
+            raise s.DomainError("Этот план находится в архиве.")
+        values = self.data["values"]
+        values["category_id"] = plan.category_id
+        total = plan.agreed_minor if plan.agreed_minor is not None else plan.expected_minor
+        if total and total > 0:
+            values["planned_amount"] = s.money(total)
+        self.data["values"] = values
 
     def next_missing(self):
         values = self.data["values"]
@@ -218,6 +244,16 @@ class Conversation:
                     ],
                     [self.cb("Изменить примечание", "change:note")],
                 ]
+                suggestions = self.suggested_plans()
+                if suggestions:
+                    text += (
+                        "\n\nПодходящие планы — выберите вариант, чтобы подставить его "
+                        "категорию и общую плановую сумму. Связь с планом не создаётся автоматически."
+                    )
+                    rows += [
+                        [self.cb("Использовать: " + plan.title, "plan:" + plan.id)]
+                        for plan in suggestions
+                    ]
             return message(text, rows)
         rows.append([self.cb("Отменить ввод", "cancel")])
         return message(prompts[step], rows)
@@ -486,6 +522,9 @@ class Conversation:
                     self.data["review_field"] = True
                     self.data.pop("parent", None)
                     return self.advance(field)
+            if action == "plan" and step == "confirm" and self.data["mode"].endswith("expense"):
+                self.use_plan_suggestion(parts[3])
+                return self.advance("confirm")
             if action == "today" and step == "paid_on":
                 return self.input("сегодня")
             if action == "skip" and step in ("expected", "agreed", "due_month", "note"):

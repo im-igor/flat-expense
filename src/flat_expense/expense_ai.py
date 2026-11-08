@@ -82,7 +82,58 @@ class LocalExpenseAI:
             ["title: " + path + " | text: " + CATEGORY_HINTS.get(path, path) for path in paths]
         )
 
-    def suggest(self, text: str, categories: list[dict], today: date) -> dict:
+    def suggest_plans(self, query: str, plans: list[dict]) -> list[str]:
+        """Return up to three active plan IDs relevant to a payment draft.
+
+        Plan text is embedded only for this request: unlike the category dictionary,
+        it is user data and can change at any time, so it must not be cached.
+        IDs never leave the application; Ollama receives only plan descriptions.
+        """
+        documents, identifiers = [], []
+        for plan in plans:
+            title = plan.get("title")
+            identifier = plan.get("id")
+            if not isinstance(title, str) or not isinstance(identifier, str):
+                continue
+            documents.append(
+                "title: "
+                + title
+                + " | category: "
+                + str(plan.get("category") or "")
+                + " | note: "
+                + str(plan.get("note") or "")
+            )
+            identifiers.append(identifier)
+        if not documents:
+            return []
+        vectors = self.embed(
+            [*documents, "task: match a completed payment to a planned purchase | query: " + query]
+        )
+        plan_vectors, query_vector = vectors[:-1], vectors[-1]
+        if any(len(vector) != len(query_vector) for vector in plan_vectors):
+            raise ValueError("Embedding dimensions differ")
+        ranked = sorted(
+            (
+                (
+                    sum(x * y for x, y in zip(query_vector, vector, strict=True))
+                    + lexical_bonus(query, document),
+                    identifier,
+                )
+                for document, vector, identifier in zip(
+                    documents, plan_vectors, identifiers, strict=True
+                )
+            ),
+            reverse=True,
+        )
+        return [
+            identifier
+            for score, identifier in ranked[:3]
+            if score >= self.config.expense_ai_min_similarity
+        ]
+
+    def suggest(
+        self, text: str, categories: list[dict], today: date, plans: list[dict] | None = None
+    ) -> dict:
         if not self.config.expense_ai_enabled or not text.strip() or len(text) > 4000:
             raise AIUnavailable()
         draft = extract(text, today)
@@ -116,6 +167,11 @@ class LocalExpenseAI:
                 and margin >= self.config.expense_ai_min_margin
             ):
                 draft["values"]["category_id"] = choices[path]
+            if plans:
+                try:
+                    draft["plan_suggestions"] = self.suggest_plans(query, plans)
+                except (httpx.HTTPError, ValueError, KeyError, TypeError, OverflowError):
+                    log.warning("Локальный ИИ не смог подобрать планы к оплате.")
             return draft
         except (httpx.HTTPError, ValueError, KeyError, TypeError, OverflowError):
             log.warning("Локальный ИИ недоступен или вернул некорректный ответ.")

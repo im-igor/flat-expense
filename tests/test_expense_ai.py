@@ -131,6 +131,24 @@ def test_wizard_ai_category_can_be_overridden(client, headers, category):
     assert record["category"].endswith("Черновые материалы")
 
 
+def test_quick_entry_offers_matching_plans_as_optional_templates(client, headers, category):
+    from conftest import make_plan
+
+    plan = make_plan(client, headers, category, title="Межкомнатные двери")
+    ai = install_ai(client, category)
+    ai.suggest.return_value["plan_suggestions"] = [plan["id"]]
+    chat = Chat(client, headers)
+    preview = chat.send("Оплатил аванс за двери 100000")
+    assert "Подходящие планы" in preview["messages"][0]["text"]
+    assert ai.suggest.call_args.args[3] == [plan]
+    chat.click("Использовать: Межкомнатные двери")
+    assert "План: 250 000,00 ₽" in chat.last["messages"][0]["text"]
+    chat.click("Подтвердить")
+    saved = client.get("/v1/expenses", headers=headers).json()[0]
+    assert saved["planned_amount"] == "250000.00"
+    assert saved["category_id"] == category["id"]
+
+
 def test_unauthorized_and_group_never_call_model(client, headers, category):
     ai = install_ai(client, category)
     chat = Chat(client, headers)
@@ -201,6 +219,38 @@ def test_adapter_matches_categories_and_caches_only_dictionary(monkeypatch, conf
     assert "owned-id" not in wire
     assert "3731" not in wire
     assert all(r["truncate"] is False for r in requests)
+
+
+def test_adapter_suggests_matching_plans_without_sending_ids(monkeypatch, config):
+    config.expense_ai_enabled = True
+    requests = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        inputs = payload["input"]
+        if inputs[-1].startswith("task: match"):
+            return httpx.Response(200, json={"embeddings": [[1, 0], [0, 1], [1, 0]]})
+        if inputs[0].startswith("task:"):
+            return httpx.Response(200, json={"embeddings": [[1, 0]]})
+        return httpx.Response(200, json={"embeddings": [[1, 0]]})
+
+    constructor = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: constructor(transport=httpx.MockTransport(respond), **kw)
+    )
+    result = LocalExpenseAI(config).suggest(
+        "Оплатил двери 100000",
+        CATEGORIES,
+        date(2026, 11, 7),
+        [
+            {"id": "doors-id", "title": "Межкомнатные двери", "category": "Ремонт → Работы"},
+            {"id": "sofa-id", "title": "Диван", "category": "Покупки → Мебель"},
+        ],
+    )
+    assert result["plan_suggestions"] == ["doors-id"]
+    wire = json.dumps(requests)
+    assert "doors-id" not in wire and "sofa-id" not in wire
 
 
 @pytest.mark.parametrize(
