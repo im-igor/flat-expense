@@ -38,6 +38,39 @@ def test_expenses_and_plans_are_independent(client, headers, category):
     assert may["actual"] == "100000.00" and june["planned_remaining"] == "280000.00"
 
 
+def test_plan_payment_keeps_one_plan_row_and_counts_only_remaining(client, headers, category):
+    plan = make_plan(
+        client, headers, category, key="flat-plan", expected="250000", due_month="2027-06-01"
+    )
+    payment = client.post(
+        f"/v1/plans/{plan['id']}/payment",
+        headers={**headers, "Idempotency-Key": "flat-payment"},
+        json={"amount": "100000", "paid_on": "2027-05-15", "version": plan["version"]},
+    )
+    assert payment.status_code == 200, payment.text
+    saved = payment.json()
+    assert saved["paid_amount"] == "100000.00"
+    assert saved["remaining_amount"] == "150000.00"
+    assert saved["payment_status"] == "partial"
+    assert client.get("/v1/expenses", headers=headers).json() == []
+    may, june = report(client, headers)["months"]
+    assert (may["actual"], may["planned_remaining"]) == ("100000.00", "0.00")
+    assert (june["actual"], june["planned_remaining"]) == ("0.00", "150000.00")
+    closed = client.post(
+        f"/v1/plans/{plan['id']}/payment",
+        headers={**headers, "Idempotency-Key": "flat-finalize"},
+        json={
+            "amount": "20000",
+            "paid_on": "2027-06-01",
+            "version": saved["version"],
+            "finalize": True,
+        },
+    )
+    assert closed.status_code == 200
+    assert closed.json()["payment_status"] == "finalized"
+    assert closed.json()["remaining_amount"] == "0.00"
+
+
 def test_repeated_delivery_and_conflicting_key(client, headers, category, sessions):
     first = make_expense(client, headers, category)
     second = make_expense(client, headers, category)
@@ -194,7 +227,9 @@ def test_expense_plan_and_paid_amount_are_independent(client, headers, category)
     assert legacy["amount"] == "118565.00"
 
 
-def test_bulk_move_plan_due_month_updates_selected_active_plans(client, headers, category, sessions):
+def test_bulk_move_plan_due_month_updates_selected_active_plans(
+    client, headers, category, sessions
+):
     first = make_plan(client, headers, category, key="bulk-first", due_month="2027-06-01")
     second = make_plan(client, headers, category, key="bulk-second", due_month="2027-07-01")
 
@@ -208,10 +243,16 @@ def test_bulk_move_plan_due_month_updates_selected_active_plans(client, headers,
 
     assert response.status_code == 200
     assert response.json() == {"updated": 2, "due_month": "2027-09-01"}
-    assert client.get(f"/v1/plans/{first['id']}", headers=headers).json()["due_month"] == "2027-09-01"
-    assert client.get(f"/v1/plans/{second['id']}", headers=headers).json()["due_month"] == "2027-09-01"
+    assert (
+        client.get(f"/v1/plans/{first['id']}", headers=headers).json()["due_month"] == "2027-09-01"
+    )
+    assert (
+        client.get(f"/v1/plans/{second['id']}", headers=headers).json()["due_month"] == "2027-09-01"
+    )
     with sessions() as db:
-        actions = db.scalars(select(Audit.action).where(Audit.action == "bulk_move_due_month")).all()
+        actions = db.scalars(
+            select(Audit.action).where(Audit.action == "bulk_move_due_month")
+        ).all()
         assert actions == ["bulk_move_due_month", "bulk_move_due_month"]
 
 
@@ -240,7 +281,9 @@ def test_bulk_move_plan_due_month_rejects_archived_plan_without_partial_update(
     )
 
     assert response.status_code == 409
-    assert client.get(f"/v1/plans/{active['id']}", headers=headers).json()["due_month"] == "2027-06-01"
+    assert (
+        client.get(f"/v1/plans/{active['id']}", headers=headers).json()["due_month"] == "2027-06-01"
+    )
 
 
 def test_new_expense_initializes_plan_once_from_fact(client, headers, category):

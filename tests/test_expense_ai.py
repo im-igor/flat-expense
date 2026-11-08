@@ -142,11 +142,13 @@ def test_quick_entry_offers_matching_plans_as_optional_templates(client, headers
     assert "Подходящие планы" in preview["messages"][0]["text"]
     assert ai.suggest.call_args.args[3] == [plan]
     chat.click("Использовать: Межкомнатные двери")
-    assert "План: 250 000,00 ₽" in chat.last["messages"][0]["text"]
-    chat.click("Подтвердить")
-    saved = client.get("/v1/expenses", headers=headers).json()[0]
-    assert saved["planned_amount"] == "250000.00"
-    assert saved["category_id"] == category["id"]
+    assert "Записать оплату в выбранный план" in chat.last["messages"][0]["text"]
+    chat.click("Внести ещё сумму")
+    assert client.get("/v1/expenses", headers=headers).json() == []
+    saved = client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+    assert saved["paid_amount"] == "3731.15"
+    assert saved["remaining_amount"] == "246268.85"
+    assert saved["payment_status"] == "partial"
 
 
 def test_unauthorized_and_group_never_call_model(client, headers, category):

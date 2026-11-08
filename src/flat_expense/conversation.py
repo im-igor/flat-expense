@@ -40,9 +40,16 @@ def expense_card(item):
 
 
 def plan_card(item):
+    status = {
+        "planned": "План",
+        "partial": "Частично оплачено",
+        "paid": "Оплачено",
+        "finalized": "Финализировано",
+    }.get(item.get("payment_status"), "План")
     return (
         f"{'Архив' if item['archived'] else 'План'}: {item['title']}\n{item['category']}\n"
-        f"Плановая стоимость: {rub(item['expected'])}\nФактическая цена: {rub(item['agreed'])}\n"
+        f"Плановая сумма: {rub(item['planned_amount'])}\nОплачено: {rub(item['paid_amount'])}"
+        f" · Осталось: {rub(item['remaining_amount'])}\nСтатус: {status}\n"
         f"Месяц расхода: {(item['due_month'] or 'без даты')[:7]}\n{item['note']}"
     )
 
@@ -106,7 +113,11 @@ class Conversation:
         if not text.strip() or len(text) > 4000:
             return message("Опишите одну оплату сообщением до 4000 символов.")
         self.ensure_categories()
-        plans = s.list_plans(self.db, self.owner, limit=100)
+        plans = [
+            plan
+            for plan in s.list_plans(self.db, self.owner, limit=100)
+            if plan["payment_status"] not in ("paid", "finalized")
+        ]
         try:
             result = self.ai.suggest(text, s.categories(self.db, self.owner), s.today(), plans)
         except AIUnavailable:
@@ -134,7 +145,12 @@ class Conversation:
             if not isinstance(identifier, str):
                 continue
             plan = self.db.get(Plan, identifier)
-            if plan and plan.owner_id == self.owner and not plan.archived:
+            if (
+                plan
+                and plan.owner_id == self.owner
+                and not plan.archived
+                and plan.payment_status not in ("paid", "finalized")
+            ):
                 result.append(plan)
         return result
 
@@ -142,14 +158,13 @@ class Conversation:
         if identifier not in self.data.get("plan_suggestions", []):
             raise s.DomainError("Этот вариант больше неактуален.")
         plan = s.owned(self.db, Plan, self.owner, identifier)
-        if plan.archived:
-            raise s.DomainError("Этот план находится в архиве.")
+        if plan.archived or plan.payment_status in ("paid", "finalized"):
+            raise s.DomainError("Этот вариант больше нельзя оплатить.")
         values = self.data["values"]
         values["category_id"] = plan.category_id
-        total = plan.agreed_minor if plan.agreed_minor is not None else plan.expected_minor
-        if total and total > 0:
-            values["planned_amount"] = s.money(total)
         self.data["values"] = values
+        self.data["selected_plan_id"] = plan.id
+        self.data["selected_plan_version"] = plan.version
 
     def next_missing(self):
         values = self.data["values"]
@@ -221,6 +236,25 @@ class Conversation:
             if parent:
                 rows.append([self.cb("Без подкатегории", "root:" + parent)])
         if step == "confirm":
+            if self.data["mode"] == "pay_plan":
+                plan = s.owned(self.db, Plan, self.owner, self.data["id"])
+                total = s.plan_amount_minor(plan)
+                payment = s.minor(v["amount"])
+                after = plan.paid_amount_minor + payment
+                remaining = None if total is None else max(0, total - after)
+                text = (
+                    f"Записать оплату в план?\n{plan.title}\n"
+                    f"План: {rub(s.money(total))}\n"
+                    f"Новая оплата: {rub(v['amount'])} · {v['paid_on']}\n"
+                    f"Будет оплачено: {rub(s.money(after))} · Осталось: {rub(s.money(remaining))}"
+                )
+                rows = [[self.cb("Сохранить оплату", "planpay:open")]]
+                if total is None or after < total:
+                    rows[0] = [
+                        self.cb("Внести ещё сумму", "planpay:open"),
+                        self.cb("Финализировать", "planpay:finalize"),
+                    ]
+                return message(text, rows)
             cat = s.category_view(
                 self.db, s.owned(self.db, Category, self.owner, v["category_id"])
             )["path"]
@@ -245,6 +279,26 @@ class Conversation:
                     [self.cb("Изменить примечание", "change:note")],
                 ]
                 suggestions = self.suggested_plans()
+                selected_plan_id = self.data.get("selected_plan_id")
+                if selected_plan_id:
+                    plan = s.owned(self.db, Plan, self.owner, selected_plan_id)
+                    total = s.plan_amount_minor(plan)
+                    after = plan.paid_amount_minor + s.minor(v["amount"])
+                    remaining = None if total is None else max(0, total - after)
+                    text = (
+                        f"Записать оплату в выбранный план?\n{plan.title}\n"
+                        f"План: {rub(s.money(total))}\n"
+                        f"Новая оплата: {rub(v['amount'])} · {v['paid_on']}\n"
+                        f"Будет оплачено: {rub(s.money(after))} · Осталось: {rub(s.money(remaining))}"
+                    )
+                    rows = [[self.cb("Сохранить оплату", "planpay:open")]]
+                    if total is None or after < total:
+                        rows[0] = [
+                            self.cb("Внести ещё сумму", "planpay:open"),
+                            self.cb("Финализировать", "planpay:finalize"),
+                        ]
+                    rows.append([self.cb("Отдельный расход", "detachplan")])
+                    return message(text, rows)
                 if suggestions:
                     text += (
                         "\n\nПодходящие планы — выберите вариант, чтобы подставить его "
@@ -310,6 +364,8 @@ class Conversation:
         else:
             return self.prompt()
         self.data["values"] = v
+        if self.data["mode"] == "pay_plan":
+            return self.advance("paid_on" if step == "amount" else "confirm")
         if self.data.pop("review_field", False) or self.data.get("quick"):
             return self.next_missing()
         if self.data["mode"].startswith("edit"):
@@ -329,7 +385,31 @@ class Conversation:
 
     def confirm(self):
         v, mode = self.data["values"], self.data["mode"]
+        if mode == "pay_plan":
+            item = s.record_plan_payment(
+                self.db,
+                self.owner,
+                self.data["id"],
+                s.minor(v["amount"]),
+                date.fromisoformat(v["paid_on"]),
+                self.data["version"],
+                self.data.get("finalize", False),
+            )
+            self.clear()
+            return self.show_plan(item["id"])
         if mode.endswith("expense"):
+            if identifier := self.data.get("selected_plan_id"):
+                item = s.record_plan_payment(
+                    self.db,
+                    self.owner,
+                    identifier,
+                    s.minor(v["amount"]),
+                    date.fromisoformat(v["paid_on"]),
+                    self.data["selected_plan_version"],
+                    self.data.get("plan_finalize", False),
+                )
+                self.clear()
+                return self.show_plan(item["id"])
             data = ExpenseIn.model_validate(v)
             item = (
                 s.update_expense(self.db, self.owner, self.data["id"], data, self.data["version"])
@@ -376,6 +456,11 @@ class Conversation:
         if item["archived"]:
             rows = [[button("Восстановить", f"restorep:{identifier}:{item['version']}")]]
         else:
+            payment_actions = []
+            if item["payment_status"] not in ("paid", "finalized"):
+                payment_actions = [
+                    button("Внести сумму", "payp:" + identifier),
+                ]
             rows = [
                 [
                     button("Плановая сумма", "ep:expected:" + identifier),
@@ -390,7 +475,23 @@ class Conversation:
                     button("В архив", f"askarch:{identifier}:{item['version']}"),
                 ],
             ]
+            if payment_actions:
+                rows.insert(0, payment_actions)
         return message(plan_card(item), rows)
+
+    def start_plan_payment(self, identifier):
+        plan = s.owned(self.db, Plan, self.owner, identifier)
+        if plan.archived or plan.payment_status in ("paid", "finalized"):
+            raise s.DomainError("Этот план уже закрыт.")
+        self.data = {
+            "mode": "pay_plan",
+            "step": "amount",
+            "values": {},
+            "id": identifier,
+            "version": plan.version,
+        }
+        self.save()
+        return self.prompt()
 
     def edit(self, kind, field, identifier):
         if kind == "ed":
@@ -516,6 +617,16 @@ class Conversation:
                 return message("Ввод отменён.")
             if action == "confirm" and step == "confirm":
                 return self.confirm()
+            if action == "planpay" and step == "confirm":
+                if self.data["mode"] == "pay_plan":
+                    self.data["finalize"] = parts[3] == "finalize"
+                else:
+                    self.data["plan_finalize"] = parts[3] == "finalize"
+                return self.confirm()
+            if action == "detachplan" and step == "confirm":
+                self.data.pop("selected_plan_id", None)
+                self.data.pop("selected_plan_version", None)
+                return self.advance("confirm")
             if action == "change" and step == "confirm" and self.data["mode"].endswith("expense"):
                 field = parts[3]
                 if field in ("amount", "paid_on", "description", "category", "note"):
@@ -545,6 +656,8 @@ class Conversation:
             return self.show_expense(parts[1])
         if parts[0] == "vp":
             return self.show_plan(parts[1])
+        if parts[0] == "payp":
+            return self.start_plan_payment(parts[1])
         if parts[0] in ("ed", "ep"):
             return self.edit(*parts)
         if parts[0] == "list" and parts[1] in ("expenses", "plans", "deleted", "archive"):

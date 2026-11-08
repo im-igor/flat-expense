@@ -293,6 +293,7 @@ def audit(db: Session, owner: int, entity: str, identifier: str, action: str, be
 
 def plan_view(db: Session, item: Plan) -> dict:
     category = owned(db, Category, item.owner_id, item.category_id)
+    planned_minor = plan_amount_minor(item)
     return {
         "id": item.id,
         "title": item.title,
@@ -301,10 +302,26 @@ def plan_view(db: Session, item: Plan) -> dict:
         "expected": money(item.expected_minor),
         "agreed": money(item.agreed_minor),
         "due_month": item.due_month.isoformat() if item.due_month else None,
+        "planned_amount": money(planned_minor),
+        "paid_amount": money(item.paid_amount_minor),
+        "paid_on": item.paid_on.isoformat() if item.paid_on else None,
+        "remaining_amount": money(plan_remaining_minor(item)),
+        "payment_status": item.payment_status,
         "note": item.note,
         "archived": item.archived,
         "version": item.version,
     }
+
+
+def plan_amount_minor(item: Plan) -> int | None:
+    return item.agreed_minor if item.agreed_minor is not None else item.expected_minor
+
+
+def plan_remaining_minor(item: Plan) -> int | None:
+    if item.payment_status in ("paid", "finalized"):
+        return 0
+    planned = plan_amount_minor(item)
+    return max(0, planned - item.paid_amount_minor) if planned is not None else None
 
 
 def validate_expense(db: Session, owner: int, data: ExpenseIn):
@@ -396,6 +413,41 @@ def update_plan(db: Session, owner: int, identifier: str, data: PlanIn, version:
     return result
 
 
+def record_plan_payment(
+    db: Session,
+    owner: int,
+    identifier: str,
+    amount_minor: int,
+    paid_on: date,
+    version: int,
+    finalize: bool = False,
+):
+    item = owned(db, Plan, owner, identifier, lock=True)
+    if item.version != version:
+        raise DomainError("План уже изменён. Откройте его заново.", 409)
+    if item.archived:
+        raise DomainError("Сначала восстановите план из архива.", 409)
+    if item.payment_status in ("paid", "finalized"):
+        raise DomainError("Этот план уже закрыт.", 409)
+    if amount_minor <= 0:
+        raise DomainError("Сумма оплаты должна быть больше нуля.")
+    before = plan_view(db, item)
+    item.paid_amount_minor += amount_minor
+    item.paid_on = paid_on
+    planned = plan_amount_minor(item)
+    if finalize:
+        item.payment_status = "finalized"
+    elif planned is not None and item.paid_amount_minor >= planned:
+        item.payment_status = "paid"
+    else:
+        item.payment_status = "partial"
+    item.version += 1
+    db.flush()
+    result = plan_view(db, item)
+    audit(db, owner, "plan", item.id, "record_payment", before, result)
+    return result
+
+
 def bulk_move_plan_due_month(db: Session, owner: int, identifiers: list[str], due_month: date):
     items = [owned(db, Plan, owner, identifier, lock=True) for identifier in sorted(identifiers)]
     archived = next((item for item in items if item.archived), None)
@@ -474,7 +526,11 @@ def summary(db: Session, owner: int, start: date, end: date):
             actual_without_loan[m] += e.amount_minor
     undated, unknown_undated, undated_count = 0, 0, 0
     for p in db.scalars(select(Plan).where(Plan.owner_id == owner, Plan.archived.is_(False))):
-        rest = p.agreed_minor if p.agreed_minor is not None else p.expected_minor
+        if p.paid_on and p.paid_on >= months[0]:
+            payment_month = p.paid_on.replace(day=1)
+            if payment_month in actual_without_loan:
+                actual_without_loan[payment_month] += p.paid_amount_minor
+        rest = plan_remaining_minor(p)
         if p.due_month is None:
             if rest is None:
                 unknown_undated += 1

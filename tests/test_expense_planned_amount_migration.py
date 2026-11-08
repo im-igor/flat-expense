@@ -49,4 +49,9 @@ def test_migration_backfills_existing_expense_plan(tmp_path, monkeypatch):
             for column in connection.exec_driver_sql("PRAGMA table_info(expenses)")
         }
         assert columns["planned_amount_minor"][3] == 1
+        plan_columns = {
+            column[1]: column for column in connection.exec_driver_sql("PRAGMA table_info(plans)")
+        }
+        assert {"paid_amount_minor", "paid_on", "payment_status"} <= set(plan_columns)
+        assert plan_columns["paid_amount_minor"][3] == 1
     engine.dispose()

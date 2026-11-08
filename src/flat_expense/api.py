@@ -23,6 +23,7 @@ from flat_expense.schemas import (
     PlanDueMonthBulkEdit,
     PlanEdit,
     PlanIn,
+    PlanPaymentIn,
     VersionIn,
 )
 from flat_expense.web import browser_actor, install_web
@@ -240,6 +241,30 @@ def create_app(config: Settings | None = None, sessions=None):
             idempotency_key,
             {"action": "plan.update", "id": identifier, **data.model_dump(mode="json")},
             lambda: s.update_plan(db, owner, identifier, data, data.version),
+        )
+
+    @app.post("/v1/plans/{identifier}/payment")
+    def record_plan_payment(
+        identifier: str,
+        data: PlanPaymentIn,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "plan.payment", "id": identifier, **data.model_dump(mode="json")},
+            lambda: s.record_plan_payment(
+                db,
+                owner,
+                identifier,
+                s.minor(data.amount),
+                data.paid_on,
+                data.version,
+                data.finalize,
+            ),
         )
 
     @app.post("/v1/plans/bulk-due-month")
