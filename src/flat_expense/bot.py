@@ -8,16 +8,24 @@ from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import (
+    ClientDecodeError,
     TelegramBadRequest,
     TelegramForbiddenError,
     TelegramNetworkError,
     TelegramRetryAfter,
+    TelegramServerError,
 )
 from aiogram.types import BotCommand, InlineKeyboardMarkup
 
 from flat_expense.config import settings
 
 log = logging.getLogger("flat_expense.bot")
+
+TRANSIENT_TELEGRAM_ERRORS = (
+    ClientDecodeError,
+    TelegramNetworkError,
+    TelegramServerError,
+)
 
 
 async def run():
@@ -102,7 +110,7 @@ async def run():
                     offset = update.update_id + 1
             except TelegramRetryAfter as exc:
                 await asyncio.sleep(exc.retry_after)
-            except (TelegramNetworkError, httpx.HTTPError):
+            except (*TRANSIENT_TELEGRAM_ERRORS, httpx.HTTPError):
                 # Never log exception text: an HTTP URL can contain the bot token.
                 log.warning("Временный сбой связи; повтор через 5 секунд.")
                 await asyncio.sleep(5)
