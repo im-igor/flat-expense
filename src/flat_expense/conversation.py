@@ -1,5 +1,6 @@
 """Durable bot conversations. No Telegram network calls in this module."""
 
+import re
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
@@ -9,6 +10,7 @@ from sqlalchemy import select
 
 from flat_expense import service as s
 from flat_expense.expense_ai import AIUnavailable
+from flat_expense.expense_text import extract_leading_payment
 from flat_expense.models import Category, Draft, Expense, Plan
 from flat_expense.schemas import ExpenseIn, PlanIn
 
@@ -85,11 +87,8 @@ class Conversation:
 
     def home(self):
         return message(
-            (
-                "Можно написать одной фразой: «Вчера оплатил штукатурку 3 731,15 ₽». ИИ предложит категорию; перед записью проверьте карточку.\n\n"
-                if self.ai
-                else ""
-            )
+            "Быстрый ввод: сначала сумма, затем описание. Например: «3 731,15 штукатурка и 3 мешка клея». "
+            "Бот сразу предложит категории из планов; перед записью проверьте карточку.\n\n"
             + "Учёт расходов на квартиру\n\nКаждая оплата хранится отдельно. План и фактическая цена покупки не считаются оплатой.\n\n/expense — расход\n/plan — будущая покупка\n/expenses — последние расходы\n/plans — будущие планы\n/month — текущий месяц (или /month 2027-06)\n/forecast — прогноз\n/undated — планы без даты\n/deleted — удалённые расходы\n/archive — архив планов\n/categories — категории\n/cancel — отменить ввод",
             [
                 [button("Записать расход", "new:expense"), button("Добавить план", "new:plan")],
@@ -108,35 +107,60 @@ class Conversation:
         return self.prompt()
 
     def quick_expense(self, text):
-        if not self.ai:
-            return message("Быстрый ввод с ИИ пока не подключён. /expense — пошаговая запись.")
         if not text.strip() or len(text) > 4000:
-            return message("Опишите одну оплату сообщением до 4000 символов.")
+            return message("Введите сумму и описание одним сообщением до 4000 символов.")
+        result = extract_leading_payment(text, s.today())
+        if not result["is_expense"]:
+            return message(
+                "Быстрый ввод: сначала сумма, затем описание. Например: «50 440 штукатурка и 3 алмазные чашки». "
+                "Для будущей покупки используйте /plan."
+            )
         self.ensure_categories()
         plans = [
             plan
             for plan in s.list_plans(self.db, self.owner, limit=100)
             if plan["payment_status"] not in ("paid", "finalized")
         ]
-        try:
-            result = self.ai.suggest(text, s.categories(self.db, self.owner), s.today(), plans)
-        except AIUnavailable:
-            return message(
-                "ИИ сейчас не смог разобрать сообщение. Расход не записан. Повторите сообщение или используйте /expense для пошагового ввода."
-            )
-        if not result["is_expense"]:
-            return message(
-                "Не удалось выделить одну фактическую оплату. Напишите сумму и за что заплатили; каждую оплату — отдельным сообщением. Для будущей покупки есть /plan."
-            )
+        plan_suggestions = self.fast_plan_suggestions(result["values"]["description"], plans)
+        category_suggestions = []
+        for identifier in plan_suggestions:
+            plan = next((item for item in plans if item["id"] == identifier), None)
+            if plan and plan["category_id"] not in category_suggestions:
+                category_suggestions.append(plan["category_id"])
         self.data = {
             "mode": "expense",
             "quick": True,
-            "step": "confirm",
+            "step": "category",
             "values": result["values"],
-            "ai_suggested": True,
-            "plan_suggestions": result.get("plan_suggestions", []),
+            "plan_suggestions": plan_suggestions,
+            "category_suggestions": category_suggestions,
         }
         return self.next_missing()
+
+    @staticmethod
+    def _search_terms(text):
+        ignored = {"оплат", "покуп", "расхо", "товар", "штука"}
+        return {
+            word[:6]
+            for word in re.findall(r"[а-яёa-z]+", text.lower())
+            if len(word) >= 5 and word[:6] not in ignored
+        }
+
+    def fast_plan_suggestions(self, description, plans):
+        """Match plan subjects locally; this deliberately never calls the AI model."""
+        query_terms = self._search_terms(description)
+        if not query_terms:
+            return []
+        ranked = []
+        for plan in plans:
+            document = " ".join(
+                str(plan.get(field) or "") for field in ("title", "category", "note")
+            )
+            shared = query_terms & self._search_terms(document)
+            if shared:
+                ranked.append((len(shared), plan["id"]))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return [identifier for _score, identifier in ranked[:3]]
 
     def suggested_plans(self):
         """Read suggestions again so archived or removed plans never appear in a draft."""
@@ -219,6 +243,24 @@ class Conversation:
         if step == "description" and v.get("description"):
             rows.append([self.cb("Оставить название покупки", "keep")])
         if step in ("category", "subcategory"):
+            if step == "category" and self.data.get("category_suggestions"):
+                suggested = []
+                for identifier in self.data["category_suggestions"]:
+                    category = self.db.get(Category, identifier)
+                    if category and category.owner_id == self.owner:
+                        suggested.append(category)
+                if suggested:
+                    rows.extend(
+                        [
+                            [
+                                self.cb(
+                                    "Подходит: " + s.category_view(self.db, category)["path"],
+                                    "quickcat:" + category.id,
+                                )
+                            ]
+                            for category in suggested
+                        ]
+                    )
             parent = self.data.get("parent") if step == "subcategory" else None
             items = list(
                 self.db.scalars(
@@ -342,7 +384,7 @@ class Conversation:
 
     def input(self, text):
         if not self.data:
-            return self.quick_expense(text) if self.ai else self.home()
+            return self.quick_expense(text)
         text = text.strip()
         step, v = self.data["step"], dict(self.data["values"])
         if step in ("amount", "planned_amount", "expected", "agreed"):
@@ -644,6 +686,10 @@ class Conversation:
                 return self.input(self.data["values"]["description"])
             if action in ("cat", "root") and step in ("category", "subcategory"):
                 return self.category_selected(parts[3])
+            if action == "quickcat" and step == "category":
+                category = s.owned(self.db, Category, self.owner, parts[3])
+                self.data["values"]["category_id"] = category.id
+                return self.next_missing()
             if action == "catpage" and step in ("category", "subcategory"):
                 self.data["page"] = max(0, int(parts[3]))
                 self.save()

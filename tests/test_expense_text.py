@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from flat_expense.expense_text import extract
+from flat_expense.expense_text import extract, extract_leading_payment
 
 TODAY = date(2026, 11, 7)
 
@@ -51,3 +51,17 @@ def test_extract_does_not_invent_or_round_money(text, amount, paid_on):
 )
 def test_ambiguous_or_nonpayment_text_is_not_an_expense(text):
     assert extract(text, TODAY)["is_expense"] is False
+
+
+def test_fast_format_uses_only_leading_amount_and_keeps_quantity_in_description():
+    result = extract_leading_payment(
+        "50 440 оплата за покупку штукатурки и 3 алмазные чашки для шлифования бетона",
+        TODAY,
+    )
+    assert result["is_expense"] is True
+    assert result["values"] == {
+        "amount": "50440.00",
+        "paid_on": "2026-11-07",
+        "description": "оплата за покупку штукатурки и 3 алмазные чашки для шлифования бетона",
+        "note": "",
+    }

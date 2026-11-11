@@ -38,13 +38,13 @@ def test_quick_draft_review_edit_restart_confirm_and_replay(
         headers=headers,
         json={"name": "Черновые материалы", "parent_id": category["parent_id"]},
     )
-    ai = install_ai(client, category)
     chat = Chat(client, headers)
-    preview = chat.send("Вчера оплатил штукатурку 3 731,15")
-    assert "Черновик подготовлен с ИИ" in preview["messages"][0]["text"]
+    chat.send("3 731,15 штукатурка")
+    chat.click("Ремонт")
+    preview = chat.click("Черновые материалы")
+    assert "Сохранить расход" in preview["messages"][0]["text"]
     duplicate = client.post("/internal/telegram/update", headers=headers, json=chat.last_update)
     assert duplicate.json() == preview
-    assert ai.suggest.call_count == 1
     assert client.get("/v1/expenses", headers=headers).json() == []
     stale = preview["messages"][0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
     chat.click("Изменить сумму")
@@ -77,34 +77,26 @@ def test_quick_draft_review_edit_restart_confirm_and_replay(
         assert records[0]["category"].endswith("Черновые материалы")
 
 
-def test_missing_fields_are_asked_and_cancellation_writes_nothing(client, headers, category):
-    install_ai(client, category, amount=None, paid_on=None, category_id=None)
+def test_fast_format_requires_amount_and_description_and_cancellation_writes_nothing(
+    client, headers, category
+):
     chat = Chat(client, headers)
     chat.send("/expense Оплатил штукатурку")
-    assert "Сколько оплатили" in chat.last["messages"][0]["text"]
-    chat.send("1000")
-    chat.click("Сегодня")
-    chat.click("Ремонт")
-    chat.click("Работы")
-    chat.click("Отменить")
+    assert "сначала сумма" in chat.last["messages"][0]["text"]
+    chat.send("1000 штукатурка")
+    chat.click("Отменить ввод")
     assert client.get("/v1/expenses", headers=headers).json() == []
 
 
-def test_ai_outage_keeps_manual_flow_and_previous_draft(client, headers, category):
+def test_fast_input_does_not_call_model(client, headers, category):
     ai = install_ai(client, category)
     ai.suggest.side_effect = AIUnavailable()
     chat = Chat(client, headers)
-    chat.send("Расход 100 рублей")
-    assert "Расход не записан" in chat.last["messages"][0]["text"]
-    chat.send("/expense")
-    chat.send("100")
-    chat.click("Сегодня")
-    chat.send("Штукатурка")
-    chat.click("Пропустить")
-    assert "вручную" in chat.last["messages"][0]["text"]
+    chat.send("100 штукатурка")
     chat.click("Ремонт")
     chat.click("Работы")
     chat.click("Подтвердить")
+    ai.suggest.assert_not_called()
     assert len(client.get("/v1/expenses", headers=headers).json()) == 1
 
 
@@ -136,19 +128,37 @@ def test_quick_entry_offers_matching_plans_as_optional_templates(client, headers
 
     plan = make_plan(client, headers, category, title="Межкомнатные двери")
     ai = install_ai(client, category)
-    ai.suggest.return_value["plan_suggestions"] = [plan["id"]]
     chat = Chat(client, headers)
-    preview = chat.send("Оплатил аванс за двери 100000")
+    chat.send("100000 аванс за двери")
+    preview = chat.click("Подходит: Ремонт → Работы")
     assert "Подходящие планы" in preview["messages"][0]["text"]
-    assert ai.suggest.call_args.args[3] == [plan]
+    ai.suggest.assert_not_called()
     chat.click("Использовать: Межкомнатные двери")
     assert "Записать оплату в выбранный план" in chat.last["messages"][0]["text"]
     chat.click("Внести ещё сумму")
     assert client.get("/v1/expenses", headers=headers).json() == []
     saved = client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
-    assert saved["paid_amount"] == "3731.15"
-    assert saved["remaining_amount"] == "246268.85"
+    assert saved["paid_amount"] == "100000.00"
+    assert saved["remaining_amount"] == "150000.00"
     assert saved["payment_status"] == "partial"
+
+
+def test_fast_entry_accepts_product_quantities_and_suggests_category_from_plan(
+    client, headers, category
+):
+    from conftest import make_plan
+
+    make_plan(client, headers, category, title="Штукатурка")
+    ai = install_ai(client, category)
+    chat = Chat(client, headers)
+    preview = chat.send(
+        "50 440 оплата за покупку штукатурки и 3 алмазные чашки для шлифования бетона"
+    )
+    assert "Подходит: Ремонт → Работы" in str(preview)
+    ai.suggest.assert_not_called()
+    preview = chat.click("Подходит: Ремонт → Работы")
+    assert "50 440,00 ₽" in preview["messages"][0]["text"]
+    assert "3 алмазные чашки" in preview["messages"][0]["text"]
 
 
 def test_unauthorized_and_group_never_call_model(client, headers, category):
@@ -162,28 +172,28 @@ def test_unauthorized_and_group_never_call_model(client, headers, category):
 def test_bot_uses_existing_dictionary_without_reintroducing_defaults(client, headers, category):
     install_ai(client, category)
     before = client.get("/v1/categories", headers=headers).json()
-    Chat(client, headers).send("Штукатурка 3731,15")
+    Chat(client, headers).send("3731,15 штукатурка")
     assert client.get("/v1/categories", headers=headers).json() == before
 
 
-def test_plan_or_multiple_payments_do_not_become_expense(client, headers, category):
-    ai = install_ai(client, category)
-    ai.suggest.return_value["is_expense"] = False
+def test_quick_format_rejects_natural_language_plan(client, headers, category):
     chat = Chat(client, headers)
-    assert "одну фактическую" in chat.send("Куплю диван за 50000")["messages"][0]["text"]
+    assert "сначала сумма" in chat.send("Куплю диван за 50000")["messages"][0]["text"]
     assert client.get("/v1/expenses", headers=headers).json() == []
 
 
-def test_failed_quick_replacement_preserves_existing_draft(client, headers, category):
-    ai = install_ai(client, category)
+def test_invalid_quick_replacement_preserves_existing_draft(client, headers, category):
     chat = Chat(client, headers)
-    chat.send("Штукатурка 3731,15")
-    ai.suggest.side_effect = AIUnavailable()
+    chat.send("3731,15 Штукатурка")
     chat.send("/expense Другая оплата 2000")
     chat.send("/start")
-    assert "Штукатурка" in chat.last["messages"][0]["text"]
+    assert "Выберите категорию" in chat.last["messages"][0]["text"]
+    chat.click("Ремонт")
+    chat.click("Работы")
     chat.click("Подтвердить")
-    assert client.get("/v1/expenses", headers=headers).json()[0]["amount"] == "3731.15"
+    record = client.get("/v1/expenses", headers=headers).json()[0]
+    assert record["amount"] == "3731.15"
+    assert record["description"] == "Штукатурка"
 
 
 def provider(monkeypatch, config, doc_vectors=None, query_vector=None, status=200, body=None):

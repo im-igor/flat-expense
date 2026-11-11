@@ -21,6 +21,45 @@ PAYMENT = re.compile(
 )
 
 
+def extract_leading_payment(text: str, today: date) -> dict:
+    """Parse the fast ``amount + description`` format without inference.
+
+    Only the first number is money by definition. Later numbers stay in the
+    description, so a quantity such as ``3 алмазные чашки`` is not a payment.
+    """
+    original = text.strip()
+    values = {"description": original[:500], "note": original if len(original) > 500 else ""}
+    match = NUMBER.match(original)
+    if match is None:
+        return {"is_expense": False, "values": values}
+
+    suffix = original[match.end() :]
+    unit = UNIT.match(suffix)
+    scale, _currency = unit.groups()
+    try:
+        number = Decimal(re.sub(r"[ \u00a0\u202f]", "", match.group()).replace(",", "."))
+        if scale:
+            number *= 1_000_000 if scale.lower().startswith("млн") else 1000
+        amount = s.minor(number)
+    except (s.DomainError, ArithmeticError):
+        return {"is_expense": False, "values": values}
+    if not amount:
+        return {"is_expense": False, "values": values}
+
+    description = suffix[unit.end() :].strip(" \t—–:-")
+    if not description:
+        return {"is_expense": False, "values": values}
+    values.update(
+        {
+            "amount": s.money(amount),
+            "paid_on": today.isoformat(),
+            "description": description[:500],
+            "note": description if len(description) > 500 else "",
+        }
+    )
+    return {"is_expense": True, "values": values}
+
+
 def extract(text: str, today: date) -> dict:
     text = text.strip()
     values = {"description": text[:500], "note": text if len(text) > 500 else ""}
