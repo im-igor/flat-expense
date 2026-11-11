@@ -78,6 +78,12 @@ class PlanPaymentIn(Input):
     finalize: bool = False
 
 
+class PlanPaidAmountEdit(Input):
+    paid_amount: Money
+    paid_on: date | None = None
+    version: int = Field(ge=1)
+
+
 class PlanDueMonthBulkEdit(Input):
     ids: list[str] = Field(min_length=1, max_length=500)
     due_month: date

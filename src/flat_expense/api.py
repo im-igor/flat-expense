@@ -24,6 +24,7 @@ from flat_expense.schemas import (
     PlanDueMonthBulkEdit,
     PlanEdit,
     PlanIn,
+    PlanPaidAmountEdit,
     PlanPaymentIn,
     VersionIn,
 )
@@ -304,6 +305,24 @@ def create_app(config: Settings | None = None, sessions=None):
                 data.paid_on,
                 data.version,
                 data.finalize,
+            ),
+        )
+
+    @app.post("/v1/plans/{identifier}/paid-amount")
+    def set_plan_paid_amount(
+        identifier: str,
+        data: PlanPaidAmountEdit,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "plan.set_paid_amount", "id": identifier, **data.model_dump(mode="json")},
+            lambda: s.set_plan_paid_amount(
+                db, owner, identifier, s.minor(data.paid_amount), data.paid_on, data.version
             ),
         )
 

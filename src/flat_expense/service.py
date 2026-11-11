@@ -465,6 +465,40 @@ def record_plan_payment(
     return result
 
 
+def set_plan_paid_amount(
+    db: Session,
+    owner: int,
+    identifier: str,
+    paid_amount_minor: int,
+    paid_on: date | None,
+    version: int,
+):
+    item = owned(db, Plan, owner, identifier, lock=True)
+    if item.version != version:
+        raise DomainError("План уже изменён. Откройте его заново.", 409)
+    if item.archived:
+        raise DomainError("Сначала восстановите план из архива.", 409)
+    if paid_amount_minor < 0:
+        raise DomainError("Сумма оплаты не может быть отрицательной.")
+    if paid_amount_minor and paid_on is None:
+        raise DomainError("Укажите дату последней оплаты.")
+    before = plan_view(db, item)
+    item.paid_amount_minor = paid_amount_minor
+    item.paid_on = paid_on if paid_amount_minor else None
+    planned = plan_amount_minor(item)
+    if not paid_amount_minor:
+        item.payment_status = "planned"
+    elif planned is not None and paid_amount_minor >= planned:
+        item.payment_status = "paid"
+    else:
+        item.payment_status = "partial"
+    item.version += 1
+    db.flush()
+    result = plan_view(db, item)
+    audit(db, owner, "plan", item.id, "set_paid_amount", before, result)
+    return result
+
+
 def apply_expense_to_plan(
     db: Session,
     owner: int,

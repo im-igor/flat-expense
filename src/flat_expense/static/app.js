@@ -436,7 +436,7 @@ function ledgerRowMarkup(kind,item) {
   }
   const planCell=item.planned_amount===null?`<td class="num budget-missing-cell">${editableValue('plan',item,'expected','Не заложено','inline-edit-warning')}</td>`:`<td class="num">${editableValue('plan',item,'expected',rub(item.planned_amount))}</td>`;
   const select=item.archived?'':`<input class="ledger-plan-select" type="checkbox" data-plan-id="${item.id}" aria-label="Выбрать план: ${esc(item.title)}" ${state.ledgerSelectedPlanIds.has(item.id)?'checked':''}>`;
-  const actions=item.archived?`<button class="text-button" data-action="restore-plan" data-id="${item.id}">Вернуть</button>`:`<button class="text-button" data-action="record-plan-payment" data-id="${item.id}">Внести оплату</button><button class="text-button" data-action="edit-plan" data-id="${item.id}">Изменить</button>`;
+  const actions=item.archived?`<button class="text-button" data-action="restore-plan" data-id="${item.id}">Вернуть</button>`:`${cents(item.paid_amount)>0n?`<button class="text-button" data-action="edit-plan-paid-amount" data-id="${item.id}">Изменить факт</button>`:''}${['paid','finalized'].includes(item.payment_status)?'':`<button class="text-button" data-action="record-plan-payment" data-id="${item.id}">Внести оплату</button>`}<button class="text-button" data-action="edit-plan" data-id="${item.id}">Изменить</button>`;
   const acceptsExpense=!item.archived&&!['paid','finalized'].includes(item.payment_status);
   return `<tr class="${item.archived?'inactive-row':''}${acceptsExpense?' plan-drop-target':''}" ${acceptsExpense?`data-plan-id="${item.id}" title="Перетащите сюда неразобранную оплату"`:''}><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
 }
@@ -539,7 +539,7 @@ function renderPlans() {
   const visible=rows.slice(state.planPage*PAGE_SIZE,(state.planPage+1)*PAGE_SIZE);
   const statuses=[['','Все состояния'],['priced','С оценкой'],['undated','Без месяца'],['unpriced','Без оценки'],['overdue','Месяц прошёл']];
   $('#view-plans').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="plan-search">Поиск планов</label><input id="plan-search" type="search" placeholder="Найти покупку или этап ремонта" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="plan-category">Категория планов</label><select id="plan-category"><option value="">Все категории</option>${categoryOptions(f.category)}</select><label class="screen-reader" for="plan-status">Состояние планов</label><select id="plan-status">${statuses.map(([v,l])=>`<option value="${v}" ${f.status===v?'selected':''}>${l}</option>`).join('')}</select><label class="screen-reader" for="plan-month">Месяц планов</label><input id="plan-month" type="month" value="${f.month}" aria-label="Месяц планов"><label class="filter-label"><input type="checkbox" id="plan-archived" ${f.archived?'checked':''}>Архив</label></div>
-  ${visible.length ? `<div class="table-scroll"><table><thead><tr><th>Покупка / категория</th><th>Месяц расхода</th><th class="num">План</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th><span class="screen-reader">Действия</span></th></tr></thead><tbody>${visible.map(p=>`<tr><td>${editableValue('plan',p,'title',p.title,'table-main')}${editableValue('plan',p,'category1',p.category,'table-note')}</td><td class="date-cell">${editableValue('plan',p,'due_month',monthLabel(p.due_month))}</td><td class="num">${editableValue('plan',p,'expected',p.planned_amount===null?'—':rub(p.planned_amount))}</td><td class="num">${rub(p.paid_amount)}</td><td class="num bold-num">${p.remaining_amount===null?'Не оценено':rub(p.remaining_amount)}</td><td>${planStatus(p)}</td><td><div class="row-actions">${p.archived?'':p.payment_status==='paid'||p.payment_status==='finalized'?'':`<button class="text-button" data-action="record-plan-payment" data-id="${p.id}">Внести сумму</button>`}<button class="text-button" data-action="${p.archived?'restore-plan':'edit-plan'}" data-id="${p.id}">${p.archived?'Вернуть':'Изменить'}</button></div></td></tr>`).join('')}</tbody></table></div>` : empty('Планы не найдены',f.search||f.category||f.status||f.month?'Попробуйте изменить условия поиска.':'Начните с покупки или этапа ремонта. Сумму и месяц можно уточнить позже.',f.archived?'':'new-plan','Добавить план')}
+  ${visible.length ? `<div class="table-scroll"><table><thead><tr><th>Покупка / категория</th><th>Месяц расхода</th><th class="num">План</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th><span class="screen-reader">Действия</span></th></tr></thead><tbody>${visible.map(p=>`<tr><td>${editableValue('plan',p,'title',p.title,'table-main')}${editableValue('plan',p,'category1',p.category,'table-note')}</td><td class="date-cell">${editableValue('plan',p,'due_month',monthLabel(p.due_month))}</td><td class="num">${editableValue('plan',p,'expected',p.planned_amount===null?'—':rub(p.planned_amount))}</td><td class="num">${rub(p.paid_amount)}</td><td class="num bold-num">${p.remaining_amount===null?'Не оценено':rub(p.remaining_amount)}</td><td>${planStatus(p)}</td><td><div class="row-actions">${p.archived?'':`${cents(p.paid_amount)>0n?`<button class="text-button" data-action="edit-plan-paid-amount" data-id="${p.id}">Изменить факт</button>`:''}${p.payment_status==='paid'||p.payment_status==='finalized'?'':`<button class="text-button" data-action="record-plan-payment" data-id="${p.id}">Внести сумму</button>`}`}<button class="text-button" data-action="${p.archived?'restore-plan':'edit-plan'}" data-id="${p.id}">${p.archived?'Вернуть':'Изменить'}</button></div></td></tr>`).join('')}</tbody></table></div>` : empty('Планы не найдены',f.search||f.category||f.status||f.month?'Попробуйте изменить условия поиска.':'Начните с покупки или этапа ремонта. Сумму и месяц можно уточнить позже.',f.archived?'':'new-plan','Добавить план')}
   ${pagination('plan',rows.length,state.planPage,'известный план ' + rub(rows.reduce((s,p)=>s+cents(planAmount(p)),0n)))}<p class="small-summary">Оплата выбранного плана обновляет его строку. Самостоятельные расходы остаются отдельными строками.</p></article>`;
 }
 function renderCategories() {
@@ -622,9 +622,9 @@ async function closeEditor(force=false) {
 function openEditor(kind, item=null, focusField='') {
   if (!state.ready) return;
   editing={kind,item,initial:''};
-  const title=kind==='expense'?(item?'Оплата':'Новая оплата'):kind==='plan'?(item?'Покупка / этап':'Новый план'):kind==='plan-payment'?'Оплата по плану':(item?.id?'Категория':'Новая категория');
+  const title=kind==='expense'?(item?'Оплата':'Новая оплата'):kind==='plan'?(item?'Покупка / этап':'Новый план'):kind==='plan-payment'?'Оплата по плану':kind==='plan-paid-amount'?'Фактическая оплата':(item?.id?'Категория':'Новая категория');
   $('#editor-title').textContent=title;
-  $('#editor-eyebrow').textContent=kind==='expense'?'ФАКТИЧЕСКИЙ РАСХОД':kind==='plan'?'ПЛАНИРОВАНИЕ':kind==='plan-payment'?'ОПЛАТА ПО ПЛАНУ':'СПРАВОЧНИК';
+  $('#editor-eyebrow').textContent=kind==='expense'?'ФАКТИЧЕСКИЙ РАСХОД':kind==='plan'?'ПЛАНИРОВАНИЕ':kind==='plan-payment'||kind==='plan-paid-amount'?'ОПЛАТА ПО ПЛАНУ':'СПРАВОЧНИК';
   let fields='';
   if (kind==='expense') {
     const v=item||{amount:'',planned_amount:'',paid_on:state.today,description:'',category_id:'',note:''};
@@ -645,6 +645,10 @@ function openEditor(kind, item=null, focusField='') {
       field('amount','Новая оплата, ₽',`<input id="amount" name="amount" inputmode="decimal" required placeholder="Например, 25 000">`,'Сумма будет добавлена к уже оплаченному: '+rub(item.paid_amount)+'.')+
       field('paid_on','Дата оплаты',`<input id="paid_on" name="paid_on" type="date" required min="2000-01-01" max="2100-12-31" value="${state.today}">`,'Сохраняется как последняя дата оплаты.')+
       field('finalize','',`<label class="filter-label"><input id="finalize" type="checkbox"> Больше оплат не будет — финализировать</label>`,'После финализации остаток не попадёт в прогноз.',true);
+  } else if (kind==='plan-paid-amount') {
+    fields=field('plan_title','План',`<input id="plan_title" value="${esc(item.title)}" disabled>`,'',true)+
+      field('paid_amount','Оплачено всего, ₽',`<input id="paid_amount" name="paid_amount" inputmode="decimal" required value="${esc(item.paid_amount)}">`,'Укажите точную общую сумму. Ноль отменит все внесённые оплаты.')+
+      field('paid_on','Дата последней оплаты',`<input id="paid_on" name="paid_on" type="date" min="2000-01-01" max="2100-12-31" value="${item.paid_on||''}">`,'Для ненулевой суммы обязательна; при нуле будет очищена.');
   } else {
     const parentId=item?.parent_id||'';
     const parent=state.categories.find(c=>c.id===parentId);
@@ -654,7 +658,7 @@ function openEditor(kind, item=null, focusField='') {
   const categoryRemoval=kind==='category'&&item?`<div class="category-danger"><h3>Удаление и замена</h3>${item.child_count?'<p>У этой группы есть подкатегории. Сначала удалите или замените их.</p>':item.expense_count||item.plan_count?`<p>Категория используется: ${plural(item.expense_count,'оплата','оплаты','оплат')} и ${plural(item.plan_count,'план','плана','планов')}. Выберите, куда их перенести.</p><select id="replacement_category"><option value="">Выберите категорию для замены</option>${state.categories.filter(c=>c.id!==item.id&&!c.child_count).map(c=>`<option value="${c.id}">${esc(c.path)}</option>`).join('')}</select><button type="button" class="button danger" data-action="remove-category" data-id="${item.id}">Заменить везде и удалить</button>`:'<p>Категория нигде не используется.</p><button type="button" class="button danger" data-action="remove-category" data-id="'+item.id+'">Удалить категорию</button>'}</div>`:'';
   $('#editor-content').innerHTML=`<form id="record-form" class="editor-form"><div id="form-error" class="form-error hidden" role="alert"></div><div class="form-grid">${fields}</div>
     ${categoryRemoval}
-    <div class="form-actions">${item?.id&&kind!=='category'&&kind!=='plan-payment'?`<button type="button" class="text-button danger-text delete-button" data-action="${kind==='expense'?(item.deleted?'restore-expense':'delete-expense'):'delete-plan'}" data-id="${item.id}">${kind==='expense'?(item.deleted?'Восстановить':'Удалить'):'Удалить'}</button>`:''}<button type="button" class="button secondary" data-action="close-dialog">${readOnly?'Закрыть':'Отмена'}</button>${readOnly?'':'<button type="submit" class="button primary" id="save-record">Сохранить</button>'}</div></form>`;
+    <div class="form-actions">${item?.id&&kind!=='category'&&kind!=='plan-payment'&&kind!=='plan-paid-amount'?`<button type="button" class="text-button danger-text delete-button" data-action="${kind==='expense'?(item.deleted?'restore-expense':'delete-expense'):'delete-plan'}" data-id="${item.id}">${kind==='expense'?(item.deleted?'Восстановить':'Удалить'):'Удалить'}</button>`:''}<button type="button" class="button secondary" data-action="close-dialog">${readOnly?'Закрыть':'Отмена'}</button>${readOnly?'':'<button type="submit" class="button primary" id="save-record">Сохранить</button>'}</div></form>`;
   if (readOnly) $('#record-form').querySelectorAll('input,textarea,select,.category-create-toggle,.inline-category button').forEach(el=>el.disabled=true);
   if(kind==='expense'&&!item){
     const planned=$('#planned_amount'),amount=$('#amount');let plannedTouched=false;
@@ -701,6 +705,9 @@ async function saveForm(event) {
     } else if (current.kind==='plan-payment') {
       data={amount:moneyInput($('#amount').value,true),paid_on:$('#paid_on').value,version:current.item.version,finalize:$('#finalize').checked};
       path='/v1/plans/'+current.item.id+'/payment';method='POST';
+    } else if (current.kind==='plan-paid-amount') {
+      data={paid_amount:moneyInput($('#paid_amount').value),paid_on:$('#paid_on').value||null,version:current.item.version};
+      path='/v1/plans/'+current.item.id+'/paid-amount';method='POST';
     } else {
       const category=$('#category2').value||$('#category1').value;
       if (!category) throw new Error('Выберите категорию расхода.');
@@ -717,7 +724,7 @@ async function saveForm(event) {
     }
     await mutation(path,method,data);
     await closeEditor(true);
-    notify(current.kind==='expense'||current.kind==='plan-payment'?'Оплата сохранена':current.kind==='plan'?'План сохранён':current.item?'Категория переименована':'Категория добавлена');
+    notify(current.kind==='expense'||current.kind==='plan-payment'||current.kind==='plan-paid-amount'?'Оплата сохранена':current.kind==='plan'?'План сохранён':current.item?'Категория переименована':'Категория добавлена');
     try { await loadData(); } catch(error) { showError(new Error('Запись сохранена, но обновить список не удалось. Нажмите «Обновить список». '+error.message)); }
   } catch(error) {showFormError(error);}
   finally {button.disabled=false;button.textContent='Сохранить';}
@@ -823,6 +830,7 @@ async function handleAction(event) {
     else if (action==='edit-expense') openEditor('expense',state.expenses.find(e=>e.id===id),target.dataset.field);
     else if (action==='edit-plan') openEditor('plan',state.plans.find(p=>p.id===id),target.dataset.field);
     else if (action==='record-plan-payment') recordPlanPayment(state.plans.find(p=>p.id===id));
+    else if (action==='edit-plan-paid-amount') openEditor('plan-paid-amount',state.plans.find(p=>p.id===id));
     else if (action==='resolve-expense-review') await resolveExpenseReview(id);
     else if (action==='select-filtered-plans') {state.ledgerSelectedPlanIds=new Set(selectablePlanRows(ledgerRows()).map(row=>row.item.id));renderLedger();}
     else if (action==='clear-selected-plans') {state.ledgerSelectedPlanIds.clear();renderLedger();}

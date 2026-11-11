@@ -71,6 +71,38 @@ def test_plan_payment_keeps_one_plan_row_and_counts_only_remaining(client, heade
     assert closed.json()["remaining_amount"] == "0.00"
 
 
+def test_plan_paid_amount_can_be_corrected_or_cleared(client, headers, category):
+    plan = make_plan(client, headers, category, expected="250000", due_month="2027-06-01")
+    recorded = post(
+        client,
+        headers,
+        f"/v1/plans/{plan['id']}/payment",
+        "record-partial",
+        {"amount": "100000", "paid_on": "2027-05-15", "version": plan["version"]},
+    ).json()
+    corrected = post(
+        client,
+        headers,
+        f"/v1/plans/{plan['id']}/paid-amount",
+        "correct-partial",
+        {"paid_amount": "75000", "paid_on": "2027-05-12", "version": recorded["version"]},
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["paid_amount"] == "75000.00"
+    assert corrected.json()["paid_on"] == "2027-05-12"
+    cleared = post(
+        client,
+        headers,
+        f"/v1/plans/{plan['id']}/paid-amount",
+        "clear-partial",
+        {"paid_amount": "0", "paid_on": None, "version": corrected.json()["version"]},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["paid_amount"] == "0.00"
+    assert cleared.json()["paid_on"] is None
+    assert cleared.json()["payment_status"] == "planned"
+
+
 def test_reviewed_bot_expense_can_be_consumed_into_plan(client, headers, category, sessions):
     plan = make_plan(client, headers, category, expected="250000", note="Договорённость")
     data = ExpenseIn(

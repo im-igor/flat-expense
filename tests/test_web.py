@@ -231,6 +231,14 @@ def test_ledger_supports_reviewing_bot_expenses_with_drag_and_drop(browser):
     assert "needs-review-row" in css
 
 
+def test_ledger_can_edit_total_paid_amount_of_a_plan(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert "edit-plan-paid-amount" in asset
+    assert "/paid-amount" in asset
+    assert "Ноль отменит все внесённые оплаты" in asset
+
+
 def test_overview_has_loan_scope_and_hover_breakdown(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text
@@ -270,7 +278,10 @@ def test_ledger_shows_paid_values_missing_budgets_and_filtered_summary(browser):
         "total.plan+=cents(row.item.planned_amount);total.fact+=amount;total.paid+=amount" in asset
     )
     assert "editableValue('expense',item,'planned_amount'" in asset
-    assert "planned_amount:moneyInput($('#planned_amount').value)||moneyInput($('#amount').value,true)" in asset
+    assert (
+        "planned_amount:moneyInput($('#planned_amount').value)||moneyInput($('#amount').value,true)"
+        in asset
+    )
     assert "if(!plannedTouched)planned.value=amount.value" in asset
     assert "budget-missing-cell" in asset
     assert "function ledgerSummary(rows)" in asset
@@ -298,10 +309,10 @@ def test_ledger_opens_at_current_month_and_supports_bulk_plan_deadlines(browser)
     asset = browser.get("/assets/app.js").text
     assert "function ledgerCurrentMonthPage(pages)" in asset
     assert "state.ledgerAutoPosition&&ledgerHasDefaultFilters()" in asset
-    assert "data-action=\"select-filtered-plans\"" in asset
-    assert "data-action=\"bulk-move-plans\"" in asset
+    assert 'data-action="select-filtered-plans"' in asset
+    assert 'data-action="bulk-move-plans"' in asset
     assert "/v1/plans/bulk-due-month" in asset
-    assert "data-action=\"record-plan-payment\"" in asset
+    assert 'data-action="record-plan-payment"' in asset
     assert "Точная дата оплаты" in asset
 
 
