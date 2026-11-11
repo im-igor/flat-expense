@@ -17,6 +17,7 @@ from flat_expense.schemas import (
     CategoryIn,
     CategoryRenameIn,
     CategoryReplaceIn,
+    ExpenseApplyToPlanIn,
     ExpenseEdit,
     ExpenseIn,
     LoanRateIn,
@@ -177,6 +178,45 @@ def create_app(config: Settings | None = None, sessions=None):
             idempotency_key,
             {"action": "expense.update", "id": identifier, **data.model_dump(mode="json")},
             lambda: s.update_expense(db, owner, identifier, data, data.version),
+        )
+
+    @app.post("/v1/expenses/{identifier}/resolve-review")
+    def resolve_expense_review(
+        identifier: str,
+        data: VersionIn,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "expense.resolve_review", "id": identifier, **data.model_dump()},
+            lambda: s.resolve_expense_review(db, owner, identifier, data.version),
+        )
+
+    @app.post("/v1/expenses/{identifier}/apply-to-plan")
+    def apply_expense_to_plan(
+        identifier: str,
+        data: ExpenseApplyToPlanIn,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "expense.apply_to_plan", "id": identifier, **data.model_dump()},
+            lambda: s.apply_expense_to_plan(
+                db,
+                owner,
+                identifier,
+                data.plan_id,
+                data.expense_version,
+                data.plan_version,
+            ),
         )
 
     @app.post("/v1/expenses/{identifier}/{action}")

@@ -66,6 +66,7 @@ def test_full_expense_wizard_restarts_and_replay(client, headers, sessions, conf
         assert len(expenses) == 1
         assert expenses[0]["amount"] == "3731.15" and expenses[0]["paid_on"] == "2027-05-31"
         assert expenses[0]["planned_amount"] == "3731.15"
+        assert expenses[0]["needs_review"] is True
 
 
 def test_plan_and_expense_creation_are_independent(client, headers, category):
@@ -90,6 +91,7 @@ def test_plan_and_expense_creation_are_independent(client, headers, category):
     expenses = client.get("/v1/expenses", headers=headers).json()
     assert plans[0]["expected"] == "280000.00"
     assert expenses[0]["amount"] == "100000.00"
+    assert expenses[0]["needs_review"] is True
 
 
 def test_bot_rejects_other_users_groups_and_stale_category(client, headers):

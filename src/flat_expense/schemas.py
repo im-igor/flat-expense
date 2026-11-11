@@ -47,6 +47,12 @@ class VersionIn(Input):
     version: int = Field(ge=1)
 
 
+class ExpenseApplyToPlanIn(Input):
+    plan_id: str
+    expense_version: int = Field(ge=1)
+    plan_version: int = Field(ge=1)
+
+
 class PlanIn(Input):
     title: Text
     category_id: str

@@ -305,6 +305,8 @@ class Conversation:
                 text = f"Сохранить расход?\n{v['description']}\nПлан: {rub(planned)}\nОплачено: {rub(v['amount'])} · {v['paid_on']}\n{cat}\n{v.get('note', '')}"
                 if self.data.get("ai_suggested"):
                     text += "\n\nЧерновик подготовлен с ИИ. Проверьте сумму, дату и категорию."
+                if self.data.get("plan_suggestions"):
+                    text += "\n\nПосле сохранения перетащите оплату на подходящий план в веб-интерфейсе."
             else:
                 text = f"Сохранить план?\n{v['title']}\n{cat}\nПлан: {rub(v.get('expected'))}\nФактическая цена: {rub(v.get('agreed'))}\nМесяц: {(v.get('due_month') or 'без даты')[:7]}\n{v.get('note', '')}"
             rows = [[self.cb("Подтвердить", "confirm"), self.cb("Отменить", "cancel")]]
@@ -320,36 +322,6 @@ class Conversation:
                     ],
                     [self.cb("Изменить примечание", "change:note")],
                 ]
-                suggestions = self.suggested_plans()
-                selected_plan_id = self.data.get("selected_plan_id")
-                if selected_plan_id:
-                    plan = s.owned(self.db, Plan, self.owner, selected_plan_id)
-                    total = s.plan_amount_minor(plan)
-                    after = plan.paid_amount_minor + s.minor(v["amount"])
-                    remaining = None if total is None else max(0, total - after)
-                    text = (
-                        f"Записать оплату в выбранный план?\n{plan.title}\n"
-                        f"План: {rub(s.money(total))}\n"
-                        f"Новая оплата: {rub(v['amount'])} · {v['paid_on']}\n"
-                        f"Будет оплачено: {rub(s.money(after))} · Осталось: {rub(s.money(remaining))}"
-                    )
-                    rows = [[self.cb("Сохранить оплату", "planpay:open")]]
-                    if total is None or after < total:
-                        rows[0] = [
-                            self.cb("Внести ещё сумму", "planpay:open"),
-                            self.cb("Финализировать", "planpay:finalize"),
-                        ]
-                    rows.append([self.cb("Отдельный расход", "detachplan")])
-                    return message(text, rows)
-                if suggestions:
-                    text += (
-                        "\n\nПодходящие планы — выберите вариант, чтобы подставить его "
-                        "категорию и общую плановую сумму. Связь с планом не создаётся автоматически."
-                    )
-                    rows += [
-                        [self.cb("Использовать: " + plan.title, "plan:" + plan.id)]
-                        for plan in suggestions
-                    ]
             return message(text, rows)
         rows.append([self.cb("Отменить ввод", "cancel")])
         return message(prompts[step], rows)
@@ -440,23 +412,11 @@ class Conversation:
             self.clear()
             return self.show_plan(item["id"])
         if mode.endswith("expense"):
-            if identifier := self.data.get("selected_plan_id"):
-                item = s.record_plan_payment(
-                    self.db,
-                    self.owner,
-                    identifier,
-                    s.minor(v["amount"]),
-                    date.fromisoformat(v["paid_on"]),
-                    self.data["selected_plan_version"],
-                    self.data.get("plan_finalize", False),
-                )
-                self.clear()
-                return self.show_plan(item["id"])
             data = ExpenseIn.model_validate(v)
             item = (
                 s.update_expense(self.db, self.owner, self.data["id"], data, self.data["version"])
                 if mode.startswith("edit")
-                else s.add_expense(self.db, self.owner, data)
+                else s.add_expense(self.db, self.owner, data, needs_review=True)
             )
             self.clear()
             return self.show_expense(item["id"])

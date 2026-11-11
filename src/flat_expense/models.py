@@ -73,6 +73,7 @@ class Expense(Base):
     category_id: Mapped[str] = mapped_column(ForeignKey("categories.id"))
     description: Mapped[str] = mapped_column(String(500))
     note: Mapped[str] = mapped_column(String(4000), default="")
+    needs_review: Mapped[bool] = mapped_column(default=False)
     deleted: Mapped[bool] = mapped_column(default=False)
     version: Mapped[int] = mapped_column(default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -220,6 +220,17 @@ def test_web_editor_supports_inline_categories_without_purchase_links(browser):
     assert "Оплаты по этой покупке" not in asset
 
 
+def test_ledger_supports_reviewing_bot_expenses_with_drag_and_drop(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    css = browser.get("/assets/style.css").text
+    assert "needs_review" in asset
+    assert "resolve-expense-review" in asset
+    assert "apply-to-plan" in asset
+    assert "dragstart" in asset and "plan-drop-target" in asset
+    assert "needs-review-row" in css
+
+
 def test_overview_has_loan_scope_and_hover_breakdown(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text

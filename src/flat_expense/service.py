@@ -273,6 +273,7 @@ def expense_view(db: Session, item: Expense) -> dict:
         "category": category_view(db, category)["path"],
         "description": item.description,
         "note": item.note,
+        "needs_review": item.needs_review,
         "deleted": item.deleted,
         "version": item.version,
     }
@@ -328,7 +329,7 @@ def validate_expense(db: Session, owner: int, data: ExpenseIn):
     owned(db, Category, owner, data.category_id)
 
 
-def add_expense(db: Session, owner: int, data: ExpenseIn) -> dict:
+def add_expense(db: Session, owner: int, data: ExpenseIn, needs_review: bool = False) -> dict:
     validate_expense(db, owner, data)
     item = Expense(
         owner_id=owner,
@@ -338,6 +339,7 @@ def add_expense(db: Session, owner: int, data: ExpenseIn) -> dict:
         category_id=data.category_id,
         description=data.description,
         note=data.note,
+        needs_review=needs_review,
     )
     db.add(item)
     db.flush()
@@ -376,6 +378,21 @@ def toggle_expense(db: Session, owner: int, identifier: str, version: int, delet
     db.flush()
     result = expense_view(db, item)
     audit(db, owner, "expense", item.id, "delete" if deleted else "restore", before, result)
+    return result
+
+
+def resolve_expense_review(db: Session, owner: int, identifier: str, version: int):
+    item = owned(db, Expense, owner, identifier, lock=True)
+    if item.version != version:
+        raise DomainError("Запись уже изменена. Откройте её заново.", 409)
+    if item.deleted:
+        raise DomainError("Сначала восстановите удалённую запись.", 409)
+    before = expense_view(db, item)
+    item.needs_review = False
+    item.version += 1
+    db.flush()
+    result = expense_view(db, item)
+    audit(db, owner, "expense", item.id, "resolve_review", before, result)
     return result
 
 
@@ -445,6 +462,53 @@ def record_plan_payment(
     db.flush()
     result = plan_view(db, item)
     audit(db, owner, "plan", item.id, "record_payment", before, result)
+    return result
+
+
+def apply_expense_to_plan(
+    db: Session,
+    owner: int,
+    expense_id: str,
+    plan_id: str,
+    expense_version: int,
+    plan_version: int,
+):
+    """Consume a reviewed Telegram expense into one plan without retaining a link."""
+    expense = owned(db, Expense, owner, expense_id, lock=True)
+    plan = owned(db, Plan, owner, plan_id, lock=True)
+    if expense.version != expense_version or plan.version != plan_version:
+        raise DomainError("Запись уже изменена. Обновите список и повторите действие.", 409)
+    if expense.deleted:
+        raise DomainError("Эта оплата уже удалена.", 409)
+    if not expense.needs_review:
+        raise DomainError("Эта оплата уже разобрана.", 409)
+    if plan.archived:
+        raise DomainError("Сначала восстановите план из архива.", 409)
+    if plan.payment_status in ("paid", "finalized"):
+        raise DomainError("Этот план уже закрыт.", 409)
+
+    merged_note = plan.note
+    if expense.note:
+        merged_note = f"{plan.note}\n\n{expense.note}" if plan.note else expense.note
+    if len(merged_note) > 4000:
+        raise DomainError("После объединения примечание плана будет длиннее 4000 символов.")
+
+    plan_before = plan_view(db, plan)
+    expense_before = expense_view(db, expense)
+    plan.paid_amount_minor += expense.amount_minor
+    plan.paid_on = max((value for value in (plan.paid_on, expense.paid_on) if value), default=None)
+    plan.note = merged_note
+    planned = plan_amount_minor(plan)
+    plan.payment_status = (
+        "paid" if planned is not None and plan.paid_amount_minor >= planned else "partial"
+    )
+    plan.version += 1
+    db.flush()
+    result = plan_view(db, plan)
+    audit(db, owner, "plan", plan.id, "apply_expense", plan_before, result)
+    audit(db, owner, "expense", expense.id, "consume", expense_before, {"deleted": True})
+    db.delete(expense)
+    db.flush()
     return result
 
 

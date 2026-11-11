@@ -71,6 +71,96 @@ def test_plan_payment_keeps_one_plan_row_and_counts_only_remaining(client, heade
     assert closed.json()["remaining_amount"] == "0.00"
 
 
+def test_reviewed_bot_expense_can_be_consumed_into_plan(client, headers, category, sessions):
+    plan = make_plan(client, headers, category, expected="250000", note="Договорённость")
+    data = ExpenseIn(
+        description="Первый платёж",
+        category_id=category["id"],
+        amount="100000",
+        paid_on="2027-05-15",
+        note="Счёт № 15",
+    )
+    with sessions() as db, db.begin():
+        expense = s.add_expense(db, 111, data, needs_review=True)
+
+    result = post(
+        client,
+        headers,
+        f"/v1/expenses/{expense['id']}/apply-to-plan",
+        "apply-review-expense",
+        {
+            "plan_id": plan["id"],
+            "expense_version": expense["version"],
+            "plan_version": plan["version"],
+        },
+    )
+    assert result.status_code == 200, result.text
+    saved = result.json()
+    assert saved["paid_amount"] == "100000.00"
+    assert saved["paid_on"] == "2027-05-15"
+    assert saved["payment_status"] == "partial"
+    assert saved["note"] == "Договорённость\n\nСчёт № 15"
+    assert client.get("/v1/expenses", headers=headers).json() == []
+    assert client.get(f"/v1/expenses/{expense['id']}", headers=headers).status_code == 404
+    assert report(client, headers)["months"][0]["actual"] == "100000.00"
+
+
+def test_reviewed_expense_can_be_left_independent(client, headers, category, sessions):
+    data = ExpenseIn(
+        description="Самостоятельный расход",
+        category_id=category["id"],
+        amount="100000",
+        paid_on="2027-05-15",
+    )
+    with sessions() as db, db.begin():
+        expense = s.add_expense(db, 111, data, needs_review=True)
+
+    result = post(
+        client,
+        headers,
+        f"/v1/expenses/{expense['id']}/resolve-review",
+        "resolve-review-expense",
+        {"version": expense["version"]},
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["needs_review"] is False
+    assert (
+        client.get(f"/v1/expenses/{expense['id']}", headers=headers).json()["amount"] == "100000.00"
+    )
+
+
+def test_consuming_expense_keeps_later_plan_payment_date(client, headers, category, sessions):
+    plan = make_plan(client, headers, category)
+    recorded = post(
+        client,
+        headers,
+        f"/v1/plans/{plan['id']}/payment",
+        "later-plan-payment",
+        {"amount": "1000", "paid_on": "2027-06-20", "version": plan["version"]},
+    ).json()
+    data = ExpenseIn(
+        description="Более ранний платёж",
+        category_id=category["id"],
+        amount="100000",
+        paid_on="2027-05-15",
+    )
+    with sessions() as db, db.begin():
+        expense = s.add_expense(db, 111, data, needs_review=True)
+
+    saved = post(
+        client,
+        headers,
+        f"/v1/expenses/{expense['id']}/apply-to-plan",
+        "keep-later-payment-date",
+        {
+            "plan_id": plan["id"],
+            "expense_version": expense["version"],
+            "plan_version": recorded["version"],
+        },
+    ).json()
+    assert saved["paid_on"] == "2027-06-20"
+
+
 def test_repeated_delivery_and_conflicting_key(client, headers, category, sessions):
     first = make_expense(client, headers, category)
     second = make_expense(client, headers, category)

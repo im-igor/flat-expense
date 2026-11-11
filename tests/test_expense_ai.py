@@ -123,7 +123,7 @@ def test_wizard_ai_category_can_be_overridden(client, headers, category):
     assert record["category"].endswith("Черновые материалы")
 
 
-def test_quick_entry_offers_matching_plans_as_optional_templates(client, headers, category):
+def test_quick_entry_marks_matching_plan_payment_for_web_review(client, headers, category):
     from conftest import make_plan
 
     plan = make_plan(client, headers, category, title="Межкомнатные двери")
@@ -131,16 +131,15 @@ def test_quick_entry_offers_matching_plans_as_optional_templates(client, headers
     chat = Chat(client, headers)
     chat.send("100000 аванс за двери")
     preview = chat.click("Подходит: Ремонт → Работы")
-    assert "Подходящие планы" in preview["messages"][0]["text"]
+    assert "перетащите оплату" in preview["messages"][0]["text"]
     ai.suggest.assert_not_called()
-    chat.click("Использовать: Межкомнатные двери")
-    assert "Записать оплату в выбранный план" in chat.last["messages"][0]["text"]
-    chat.click("Внести ещё сумму")
-    assert client.get("/v1/expenses", headers=headers).json() == []
+    chat.click("Подтвердить")
+    expense = client.get("/v1/expenses", headers=headers).json()
+    assert len(expense) == 1 and expense[0]["needs_review"] is True
     saved = client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
-    assert saved["paid_amount"] == "100000.00"
-    assert saved["remaining_amount"] == "150000.00"
-    assert saved["payment_status"] == "partial"
+    assert saved["paid_amount"] == "0.00"
+    assert saved["remaining_amount"] == "250000.00"
+    assert saved["payment_status"] == "planned"
 
 
 def test_fast_entry_accepts_product_quantities_and_suggests_category_from_plan(

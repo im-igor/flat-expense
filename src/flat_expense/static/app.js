@@ -425,7 +425,10 @@ function ledgerMonthHeader(key,total) {
 function ledgerRowMarkup(kind,item) {
   const [first]=categoryParts(item.category_id);
   if(kind==='expense'){
-    return `<tr class="${item.deleted?'inactive-row':'paid-row'}"><td class="ledger-select-cell"></td><td class="date-cell">${editableValue('expense',item,'paid_on',dateLabel(item.paid_on))}</td><td>${editableValue('expense',item,'category1',first)}</td>${categoryCell('expense',item)}<td>${editableValue('expense',item,'description',item.description,'table-main')}</td><td class="num">${editableValue('expense',item,'planned_amount',rub(item.planned_amount))}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num bold-num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${rub(0n)}</td><td>${item.deleted?'<span class="badge gray">Удалена</span>':'<span class="badge paid">Оплачено</span>'}</td><td>${editableValue('expense',item,'note',item.note||'—','table-note')}</td><td><button class="text-button" data-action="${item.deleted?'restore-expense':'edit-expense'}" data-id="${item.id}">${item.deleted?'Восстановить':'Изменить'}</button></td></tr>`;
+    const review=item.needs_review&&!item.deleted;
+    const status=item.deleted?'<span class="badge gray">Удалена</span>':review?'<span class="badge amber">Разобрать</span>':'<span class="badge paid">Оплачено</span>';
+    const action=item.deleted?`<button class="text-button" data-action="restore-expense" data-id="${item.id}">Восстановить</button>`:review?`<button class="text-button" data-action="resolve-expense-review" data-id="${item.id}">Самостоятельный</button><button class="text-button" data-action="edit-expense" data-id="${item.id}">Изменить</button>`:`<button class="text-button" data-action="edit-expense" data-id="${item.id}">Изменить</button>`;
+    return `<tr class="${item.deleted?'inactive-row':review?'needs-review-row':'paid-row'}" ${review?`draggable="true" data-expense-id="${item.id}" title="Перетащите оплату на нужный план"`:''}><td class="ledger-select-cell"></td><td class="date-cell">${editableValue('expense',item,'paid_on',dateLabel(item.paid_on))}</td><td>${editableValue('expense',item,'category1',first)}</td>${categoryCell('expense',item)}<td>${editableValue('expense',item,'description',item.description,'table-main')}</td><td class="num">${editableValue('expense',item,'planned_amount',rub(item.planned_amount))}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num bold-num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${rub(0n)}</td><td>${status}</td><td>${editableValue('expense',item,'note',item.note||'—','table-note')}</td><td>${action}</td></tr>`;
   }
   if(kind==='loan'){
     const paid=item.payment_date<=state.today;
@@ -434,7 +437,8 @@ function ledgerRowMarkup(kind,item) {
   const planCell=item.planned_amount===null?`<td class="num budget-missing-cell">${editableValue('plan',item,'expected','Не заложено','inline-edit-warning')}</td>`:`<td class="num">${editableValue('plan',item,'expected',rub(item.planned_amount))}</td>`;
   const select=item.archived?'':`<input class="ledger-plan-select" type="checkbox" data-plan-id="${item.id}" aria-label="Выбрать план: ${esc(item.title)}" ${state.ledgerSelectedPlanIds.has(item.id)?'checked':''}>`;
   const actions=item.archived?`<button class="text-button" data-action="restore-plan" data-id="${item.id}">Вернуть</button>`:`<button class="text-button" data-action="record-plan-payment" data-id="${item.id}">Внести оплату</button><button class="text-button" data-action="edit-plan" data-id="${item.id}">Изменить</button>`;
-  return `<tr class="${item.archived?'inactive-row':''}"><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
+  const acceptsExpense=!item.archived&&!['paid','finalized'].includes(item.payment_status);
+  return `<tr class="${item.archived?'inactive-row':''}${acceptsExpense?' plan-drop-target':''}" ${acceptsExpense?`data-plan-id="${item.id}" title="Перетащите сюда неразобранную оплату"`:''}><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
 }
 function ledgerSummary(rows) {
   let paid=0n,plan=0n;
@@ -449,6 +453,13 @@ function ledgerBulkControls(rows) {
   const plans=selectablePlanRows(rows), selected=state.ledgerSelectedPlanIds.size;
   if(!plans.length)return '';
   return `<div class="ledger-bulk"><span>${selected?`Выбрано: ${plural(selected,'план','плана','планов')}`:`Выберите планы для переноса срока`}</span><button class="text-button" data-action="select-filtered-plans">Выбрать все ${plans.length}</button>${selected?`<label>Новый месяц <input id="bulk-due-month" type="month" min="2000-01" max="2100-12" value="${esc(state.today.slice(0,7))}"></label><button class="button secondary" data-action="bulk-move-plans">Перенести срок</button><button class="text-button" data-action="clear-selected-plans">Снять выбор</button>`:''}</div>`;
+}
+function reviewDropTargets() {
+  const pending=state.expenses.filter(item=>item.needs_review&&!item.deleted);
+  if(!pending.length)return '';
+  const plans=state.plans.filter(item=>!item.archived&&!['paid','finalized'].includes(item.payment_status));
+  if(!plans.length)return '<p class="notice">Неразобранные оплаты есть, но нет открытого плана, куда их можно зачесть.</p>';
+  return `<details class="review-drop-targets"><summary>Планы для перетаскивания (${plans.length})</summary><div>${plans.map(plan=>`<button type="button" class="plan-drop-target" data-plan-id="${plan.id}" title="Перетащите сюда неразобранную оплату">${esc(plan.title)} · ${rub(plan.remaining_amount)}</button>`).join('')}</div></details>`;
 }
 function recordPlanPayment(item) {
   if(!item)throw new Error('План не найден. Обновите данные.');
@@ -486,6 +497,7 @@ function renderLedger() {
   const summary=ledgerSummary(rows);
   $('#view-ledger').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="ledger-search">Поиск</label><input id="ledger-search" type="search" placeholder="Найти оплату или план" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="ledger-category1">Категория 1</label><select id="ledger-category1" aria-label="Категория 1"><option value="">Все категории 1</option>${roots.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category1?'selected':''}>${esc(category.name)}</option>`).join('')}<option value="${LOAN_CATEGORY_ID}" ${f.category1===LOAN_CATEGORY_ID?'selected':''}>Заём</option></select><label class="screen-reader" for="ledger-category2">Категория 2</label><select id="ledger-category2" aria-label="Категория 2" ${f.category1?'':'disabled'}><option value="">Все категории 2</option>${children.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category2?'selected':''}>${esc(category.name)}</option>`).join('')}</select><label class="filter-label"><input type="checkbox" id="ledger-loan" ${f.loan?'checked':''}>＋ заём</label><label class="screen-reader" for="ledger-month">Месяц</label><input id="ledger-month" type="month" value="${f.month}"><label class="filter-label"><input type="checkbox" id="ledger-inactive" ${f.inactive?'checked':''}>Показать удалённые и архивные</label></div>
   ${ledgerBulkControls(rows)}
+  ${reviewDropTargets()}
   <div class="ledger-summary"><div><span>Итоги отображённых строк</span><small>${f.loan?'С учётом взносов по займу':'Без взносов по займу'}</small></div><div><span>Оплачено до сегодня</span><strong>${rub(summary.paid)}</strong></div><div><span>План</span><strong>${rub(summary.plan)}</strong></div></div>
   ${visible.length?`<div class="table-scroll"><table class="ledger-table"><thead><tr><th><span class="screen-reader">Выбрать план</span></th><th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th><th class="num">План</th><th class="num">Факт, цена</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th>Примечание</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`:empty('Записи не найдены','Измените фильтры или добавьте первую оплату.','new-expense','Записать оплату')}
   ${pagination('ledger',rows.length,state.ledgerPage,'оплачено до сегодня '+rub(summary.paid)+' · план '+rub(summary.plan),pages.length)}<p class="small-summary">Все строки отсортированы по возрастанию даты. Страница заканчивается только между месяцами, поэтому число строк на странице может отличаться. В заголовке каждого месяца показаны суммы оплат и остатка открытых планов. Оплата выбранного плана обновляет его строку.</p></article>`;
@@ -734,6 +746,22 @@ async function deletePlan(id) {
     await loadData();
   }catch(error){if($('#editor').open)showFormError(error);else showError(error);}
 }
+async function resolveExpenseReview(id) {
+  const item=state.expenses.find(expense=>expense.id===id);
+  if(!item)throw new Error('Оплата не найдена. Обновите список.');
+  await mutation(`/v1/expenses/${id}/resolve-review`,'POST',{version:item.version});
+  notify('Оплата оставлена самостоятельным расходом');
+  await loadData();
+}
+async function applyExpenseToPlan(expenseId,planId) {
+  const expense=state.expenses.find(item=>item.id===expenseId);
+  const plan=state.plans.find(item=>item.id===planId);
+  if(!expense||!plan)throw new Error('Запись уже изменилась. Обновите список.');
+  if(!await confirmAction('Зачесть оплату в план?',`Оплата «${expense.description}» на ${rub(expense.amount)} будет удалена из самостоятельных расходов. Сумма добавится к плану «${plan.title}», а примечание — к его примечанию.`,'Зачесть'))return;
+  await mutation(`/v1/expenses/${expense.id}/apply-to-plan`,'POST',{plan_id:plan.id,expense_version:expense.version,plan_version:plan.version});
+  notify('Оплата зачтена в план');
+  await loadData();
+}
 async function removeCategory(id) {
   const item=state.categories.find(c=>c.id===id);
   if(!item)throw new Error('Категория не найдена. Обновите данные.');
@@ -795,6 +823,7 @@ async function handleAction(event) {
     else if (action==='edit-expense') openEditor('expense',state.expenses.find(e=>e.id===id),target.dataset.field);
     else if (action==='edit-plan') openEditor('plan',state.plans.find(p=>p.id===id),target.dataset.field);
     else if (action==='record-plan-payment') recordPlanPayment(state.plans.find(p=>p.id===id));
+    else if (action==='resolve-expense-review') await resolveExpenseReview(id);
     else if (action==='select-filtered-plans') {state.ledgerSelectedPlanIds=new Set(selectablePlanRows(ledgerRows()).map(row=>row.item.id));renderLedger();}
     else if (action==='clear-selected-plans') {state.ledgerSelectedPlanIds.clear();renderLedger();}
     else if (action==='bulk-move-plans') await bulkMovePlans();
@@ -845,6 +874,35 @@ function updateFilter(event) {
   return true;
 }
 document.addEventListener('click',handleAction);
+let draggedExpenseId=null;
+document.addEventListener('dragstart',event=>{
+  const row=event.target.closest('[data-expense-id]');
+  if(!row)return;
+  draggedExpenseId=row.dataset.expenseId;
+  event.dataTransfer.effectAllowed='move';
+  event.dataTransfer.setData('text/plain',draggedExpenseId);
+  row.classList.add('dragging-expense');
+});
+document.addEventListener('dragover',event=>{
+  const target=event.target.closest('.plan-drop-target');
+  if(!target||!draggedExpenseId)return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect='move';
+  target.classList.add('drop-over');
+});
+document.addEventListener('dragleave',event=>event.target.closest('.plan-drop-target')?.classList.remove('drop-over'));
+document.addEventListener('dragend',()=>{
+  draggedExpenseId=null;
+  document.querySelectorAll('.dragging-expense,.drop-over').forEach(item=>item.classList.remove('dragging-expense','drop-over'));
+});
+document.addEventListener('drop',async event=>{
+  const target=event.target.closest('.plan-drop-target');
+  const expenseId=draggedExpenseId||event.dataTransfer?.getData('text/plain');
+  if(!target||!expenseId)return;
+  event.preventDefault();
+  target.classList.remove('drop-over');
+  try{await applyExpenseToPlan(expenseId,target.dataset.planId);}catch(error){showError(error);}
+});
 document.addEventListener('pointermove',updateChartTooltip);
 document.addEventListener('scroll',hideChartTooltip,true);
 document.addEventListener('submit',event=>{if(event.target.id==='record-form')saveForm(event);});
