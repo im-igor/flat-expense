@@ -47,8 +47,8 @@ class Settings(BaseSettings):
         if self.web_enabled:
             if self.web_owner_id is None and len(self.allowed_ids) == 1:
                 self.web_owner_id = next(iter(self.allowed_ids))
-            if self.web_owner_id not in self.allowed_ids:
-                raise ValueError("Для веб-интерфейса выберите WEB_OWNER_ID из разрешённых ID.")
+            if self.web_owner_id is None:
+                raise ValueError("Для веб-интерфейса задайте WEB_OWNER_ID.")
         if self.web_public and self.web_password_hash is None:
             raise ValueError("Для публичного веб-интерфейса задайте WEB_PASSWORD_HASH.")
         return self

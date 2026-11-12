@@ -90,7 +90,6 @@ def session_owner(request, config):
             not hmac.compare_digest(mac, signature(payload, config))
             or int(expiry) <= time.time()
             or int(owner) != config.web_owner_id
-            or int(owner) not in config.allowed_ids
         ):
             raise ValueError
         return int(owner)

@@ -29,10 +29,13 @@ def browser(sessions, web_config):
 def test_web_requires_opt_in_and_unambiguous_owner(sessions):
     with pytest.raises(ValidationError):
         Settings(api_token=TOKEN, allowed_telegram_user_ids="111,222", web_enabled=True)
-    with pytest.raises(ValidationError):
-        Settings(
-            api_token=TOKEN, allowed_telegram_user_ids="111", web_enabled=True, web_owner_id=222
-        )
+    config_with_separate_owner = Settings(
+        api_token=TOKEN, allowed_telegram_user_ids="111", web_enabled=True, web_owner_id=222
+    )
+    assert config_with_separate_owner.web_owner_id == 222
+    with TestClient(create_app(config_with_separate_owner, sessions), base_url=ORIGIN) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/v1/expenses").status_code == 200
     config = Settings(
         api_token=TOKEN, allowed_telegram_user_ids="111", web_enabled=True, web_owner_id=""
     )
