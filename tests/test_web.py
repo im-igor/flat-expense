@@ -294,7 +294,10 @@ def test_ledger_shows_paid_values_missing_budgets_and_filtered_summary(browser):
     assert "if(!plannedTouched)planned.value=amount.value" in asset
     assert "budget-missing-cell" in asset
     assert "function ledgerSummary(rows)" in asset
+    assert "function ledgerBalance(rows)" in asset
     assert "Оплачено до сегодня" in asset
+    assert "Экономия" in asset and "Перерасход" in asset
+    assert "['paid','finalized'].includes(row.item.payment_status)" in asset
     assert "Итоги отображённых строк" in asset
     assert 'id="ledger-loan"' in asset
     assert "LOAN_CATEGORY_ID" in asset

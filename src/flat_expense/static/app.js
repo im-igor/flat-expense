@@ -451,6 +451,15 @@ function ledgerSummary(rows) {
   });
   return {paid,plan};
 }
+function ledgerBalance(rows) {
+  let plan=0n, fact=0n, count=0;
+  rows.forEach(row=>{
+    if(row.kind==='expense'&&!row.item.deleted){plan+=cents(row.item.planned_amount);fact+=cents(row.item.amount);count+=1;}
+    else if(row.kind==='loan'&&row.item.payment_date<=state.today){const amount=cents(row.item.total);plan+=amount;fact+=amount;count+=1;}
+    else if(row.kind==='plan'&&!row.item.archived&&['paid','finalized'].includes(row.item.payment_status)&&row.item.planned_amount!==null){plan+=cents(row.item.planned_amount);fact+=cents(row.item.paid_amount);count+=1;}
+  });
+  return {plan,fact,difference:plan-fact,count};
+}
 function ledgerBulkControls(rows) {
   const plans=selectablePlanRows(rows), selected=state.ledgerSelectedPlanIds.size;
   if(!plans.length)return '';
@@ -505,10 +514,13 @@ function renderLedger() {
     return header+ledgerRowMarkup(row.kind,row.item);
   }).join('');
   const summary=ledgerSummary(rows);
+  const balance=ledgerBalance(rows);
+  const balanceLabel=balance.difference>0n?'Экономия':balance.difference<0n?'Перерасход':'Точно по плану';
+  const balanceValue=balance.difference<0n?rub(-balance.difference):rub(balance.difference);
   $('#view-ledger').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="ledger-search">Поиск</label><input id="ledger-search" type="search" placeholder="Найти оплату или план" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="ledger-category1">Категория 1</label><select id="ledger-category1" aria-label="Категория 1"><option value="">Все категории 1</option>${roots.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category1?'selected':''}>${esc(category.name)}</option>`).join('')}<option value="${LOAN_CATEGORY_ID}" ${f.category1===LOAN_CATEGORY_ID?'selected':''}>Заём</option></select><label class="screen-reader" for="ledger-category2">Категория 2</label><select id="ledger-category2" aria-label="Категория 2" ${f.category1?'':'disabled'}><option value="">Все категории 2</option>${children.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category2?'selected':''}>${esc(category.name)}</option>`).join('')}</select><label class="filter-label"><input type="checkbox" id="ledger-loan" ${f.loan?'checked':''}>＋ заём</label><label class="screen-reader" for="ledger-month">Месяц</label><input id="ledger-month" type="month" value="${f.month}"><label class="filter-label"><input type="checkbox" id="ledger-inactive" ${f.inactive?'checked':''}>Показать удалённые и архивные</label></div>
   ${ledgerBulkControls(rows)}
   ${reviewDropTargets()}
-  <div class="ledger-summary"><div><span>Итоги отображённых строк</span><small>${f.loan?'С учётом взносов по займу':'Без взносов по займу'}</small></div><div><span>Оплачено до сегодня</span><strong>${rub(summary.paid)}</strong></div><div><span>План</span><strong>${rub(summary.plan)}</strong></div></div>
+  <div class="ledger-summary"><div><span>Итоги отображённых строк</span><small>${f.loan?'С учётом взносов по займу':'Без взносов по займу'}</small></div><div><span>Оплачено до сегодня</span><strong>${rub(summary.paid)}</strong></div><div><span>План</span><strong>${rub(summary.plan)}</strong></div><div><span>${balanceLabel}</span><strong class="${balance.difference<0n?'ledger-overrun':''}">${balance.count?balanceValue:'—'}</strong><small>${balance.count?`План ${rub(balance.plan)} − факт ${rub(balance.fact)} · ${plural(balance.count,'завершённая позиция','завершённые позиции','завершённых позиций')}`:'Нет завершённых позиций'}</small></div></div>
   ${visible.length?`<div class="table-scroll"><table class="ledger-table"><thead><tr><th><span class="screen-reader">Выбрать план</span></th><th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th><th class="num">План</th><th class="num">Факт, цена</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th>Примечание</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`:empty('Записи не найдены','Измените фильтры или добавьте первую оплату.','new-expense','Записать оплату')}
   ${pagination('ledger',rows.length,state.ledgerPage,'оплачено до сегодня '+rub(summary.paid)+' · план '+rub(summary.plan),pages.length)}<p class="small-summary">Все строки отсортированы по возрастанию даты. Страница заканчивается только между месяцами, поэтому число строк на странице может отличаться. В заголовке каждого месяца показаны суммы оплат и остатка открытых планов. Оплата выбранного плана обновляет его строку.</p></article>`;
 }
