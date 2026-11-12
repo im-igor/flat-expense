@@ -179,6 +179,68 @@ class Conversation:
                 result.append(plan)
         return result
 
+    @staticmethod
+    def _plan_matches_query(plan, query):
+        """Keep the bot's text matching aligned with the web ledger search."""
+        if not query:
+            return True
+        document = " ".join(str(plan.get(field) or "") for field in ("title", "note", "category"))
+        return query.lower() in document.lower()
+
+    def matching_plans(self, query="", category_id=None):
+        """Return active plans filtered just like the ledger's word/category controls."""
+        plans = [
+            plan
+            for plan in s.list_plans(self.db, self.owner, limit=10000)
+            if plan["payment_status"] not in ("paid", "finalized")
+        ]
+        if category_id:
+            category = s.owned(self.db, Category, self.owner, category_id)
+            plans = [
+                plan
+                for plan in plans
+                if plan["category_id"] == category.id
+                or self.db.get(Category, plan["category_id"]).parent_id == category.id
+            ]
+        return [plan for plan in plans if self._plan_matches_query(plan, query)]
+
+    def start_plan_search(self):
+        self.data.pop("plan_search_query", None)
+        self.data.pop("plan_search_category_id", None)
+        self.data.pop("plan_search_ids", None)
+        self.data.pop("plan_search_parent_id", None)
+        return self.advance("plan_search")
+
+    def show_plan_search_results(self, query="", category_id=None):
+        query = query.strip()
+        if not query and not category_id:
+            raise s.DomainError("Введите слово для поиска или выберите категорию.")
+        if len(query) > 500:
+            raise s.DomainError("Поисковый запрос не должен быть длиннее 500 символов.")
+        plans = self.matching_plans(query, category_id)
+        self.data["plan_search_query"] = query
+        self.data["plan_search_category_id"] = category_id
+        self.data["plan_search_ids"] = [plan["id"] for plan in plans]
+        return self.advance("plan_results")
+
+    def start_searched_plan_payment(self, identifier):
+        plans = self.matching_plans(
+            self.data.get("plan_search_query", ""), self.data.get("plan_search_category_id")
+        )
+        plan = next((item for item in plans if item["id"] == identifier), None)
+        if plan is None:
+            raise s.DomainError("Этот план больше не найден. Выполните поиск ещё раз.")
+        values = self.data["values"]
+        self.data = {
+            "mode": "pay_plan",
+            "step": "confirm",
+            "values": {"amount": values["amount"], "paid_on": values["paid_on"]},
+            "id": plan["id"],
+            "version": plan["version"],
+        }
+        self.save()
+        return self.prompt()
+
     def use_plan_suggestion(self, identifier):
         if identifier not in self.data.get("plan_suggestions", []):
             raise s.DomainError("Этот вариант больше неактуален.")
@@ -237,6 +299,59 @@ class Conversation:
             "subcategory": "Выберите категорию 2.",
         }
         rows = []
+        if step == "plan_search":
+            description = v.get("description", "")
+            rows = [
+                [self.cb("Искать: " + description, "searchtext")],
+                [self.cb("Сохранить отдельным расходом", "standalone")],
+            ]
+            categories = list(
+                self.db.scalars(select(Category).where(Category.parent_id.is_(None)).order_by(Category.name))
+            )
+            rows.extend([[self.cb(category.name, "searchcat:" + category.id)] for category in categories])
+            return message(
+                "Найдите открытый план. Отправьте слово из названия, примечания или категории, "
+                "либо выберите категорию.",
+                rows,
+            )
+        if step == "plan_category":
+            parent = s.owned(self.db, Category, self.owner, self.data["plan_search_parent_id"])
+            children = list(
+                self.db.scalars(
+                    select(Category).where(Category.parent_id == parent.id).order_by(Category.name)
+                )
+            )
+            rows = [
+                [self.cb("Вся категория: " + parent.name, "searchall:" + parent.id)],
+                *[[self.cb(category.name, "searchcat:" + category.id)] for category in children],
+                [self.cb("К списку категорий", "searchagain")],
+                [self.cb("Сохранить отдельным расходом", "standalone")],
+            ]
+            return message("Уточните категорию плана.", rows)
+        if step == "plan_results":
+            plans = self.matching_plans(
+                self.data.get("plan_search_query", ""), self.data.get("plan_search_category_id")
+            )
+            self.data["plan_search_ids"] = [plan["id"] for plan in plans]
+            rows = [
+                [
+                    self.cb(
+                        f"{plan['title']} · {rub(plan['remaining_amount'])}",
+                        "plan:" + plan["id"],
+                    )
+                ]
+                for plan in plans[:8]
+            ]
+            rows += [
+                [self.cb("Искать другое", "searchagain")],
+                [self.cb("Сохранить отдельным расходом", "standalone")],
+            ]
+            return message(
+                "Выберите план для зачисления оплаты:"
+                if plans
+                else "Открытых планов по этому запросу не найдено.",
+                rows,
+            )
         if step == "paid_on":
             rows.append([self.cb("Сегодня", "today")])
         if step in ("expected", "agreed", "due_month", "note"):
@@ -307,12 +422,16 @@ class Conversation:
                 if self.data.get("ai_suggested"):
                     text += "\n\nЧерновик подготовлен с ИИ. Проверьте сумму, дату и категорию."
                 if self.data.get("plan_suggestions"):
-                    text += "\n\nПосле сохранения перетащите оплату на подходящий план в веб-интерфейсе."
+                    text += (
+                        "\n\nМожно найти план и зачислить оплату в него прямо здесь "
+                        "или после сохранения перетащите оплату на подходящий план в веб-интерфейсе."
+                    )
             else:
                 text = f"Сохранить план?\n{v['title']}\n{cat}\nПлан: {rub(v.get('expected'))}\nФактическая цена: {rub(v.get('agreed'))}\nМесяц: {(v.get('due_month') or 'без даты')[:7]}\n{v.get('note', '')}"
             rows = [[self.cb("Подтвердить", "confirm"), self.cb("Отменить", "cancel")]]
             if self.data["mode"].endswith("expense"):
                 rows += [
+                    [self.cb("Найти план", "findplan")],
                     [
                         self.cb("Изменить сумму", "change:amount"),
                         self.cb("Изменить дату", "change:paid_on"),
@@ -360,6 +479,8 @@ class Conversation:
             return self.quick_expense(text)
         text = text.strip()
         step, v = self.data["step"], dict(self.data["values"])
+        if step == "plan_search":
+            return self.show_plan_search_results(text)
         if step in ("amount", "planned_amount", "expected", "agreed"):
             value = None if text in ("-", "неизвестно") and step != "amount" else s.minor(text)
             if step in ("amount", "planned_amount") and not value:
@@ -630,15 +751,33 @@ class Conversation:
                 self.data.pop("selected_plan_id", None)
                 self.data.pop("selected_plan_version", None)
                 return self.advance("confirm")
+            if action == "findplan" and step == "confirm" and self.data["mode"].endswith("expense"):
+                return self.start_plan_search()
+            if action == "searchtext" and step == "plan_search":
+                return self.show_plan_search_results(self.data["values"].get("description", ""))
+            if action == "searchcat" and step in ("plan_search", "plan_category"):
+                category = s.owned(self.db, Category, self.owner, parts[3])
+                has_children = self.db.scalar(
+                    select(Category.id).where(Category.parent_id == category.id).limit(1)
+                )
+                if has_children:
+                    self.data["plan_search_parent_id"] = category.id
+                    return self.advance("plan_category")
+                return self.show_plan_search_results(category_id=category.id)
+            if action == "searchall" and step == "plan_category":
+                return self.show_plan_search_results(category_id=parts[3])
+            if action == "searchagain" and step in ("plan_category", "plan_results"):
+                return self.start_plan_search()
+            if action == "standalone" and step in ("plan_search", "plan_category", "plan_results"):
+                return self.advance("confirm")
             if action == "change" and step == "confirm" and self.data["mode"].endswith("expense"):
                 field = parts[3]
                 if field in ("amount", "paid_on", "description", "category", "note"):
                     self.data["review_field"] = True
                     self.data.pop("parent", None)
                     return self.advance(field)
-            if action == "plan" and step == "confirm" and self.data["mode"].endswith("expense"):
-                self.use_plan_suggestion(parts[3])
-                return self.advance("confirm")
+            if action == "plan" and step == "plan_results":
+                return self.start_searched_plan_payment(parts[3])
             if action == "today" and step == "paid_on":
                 return self.input("сегодня")
             if action == "skip" and step in ("expected", "agreed", "due_month", "note"):

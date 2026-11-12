@@ -94,6 +94,45 @@ def test_plan_and_expense_creation_are_independent(client, headers, category):
     assert expenses[0]["needs_review"] is True
 
 
+def test_expense_can_find_plan_by_word_and_record_payment(client, headers, category):
+    plan = make_plan(client, headers, category, expected="2500")
+    chat = Chat(client, headers)
+    chat.send("/expense")
+    chat.send("1000")
+    chat.click("Сегодня")
+    chat.send("Аванс за двери")
+    chat.click("Пропустить")
+    chat.click("Ремонт")
+    chat.click("Работы")
+    chat.click("Найти план")
+    chat.send("двери")
+    chat.click("Двери · 2 500,00 ₽")
+    assert "Записать оплату в план?" in chat.last["messages"][0]["text"]
+    chat.click("Внести ещё сумму")
+    saved = client.get("/v1/plans/" + plan["id"], headers=headers).json()
+    assert saved["paid_amount"] == "1000.00"
+    assert client.get("/v1/expenses", headers=headers).json() == []
+
+
+def test_expense_can_find_plan_by_category(client, headers, category):
+    plan = make_plan(client, headers, category, title="Малярные работы", expected="5000")
+    chat = Chat(client, headers)
+    chat.send("/expense")
+    chat.send("800")
+    chat.click("Сегодня")
+    chat.send("Оплата мастеру")
+    chat.click("Пропустить")
+    chat.click("Ремонт")
+    chat.click("Работы")
+    chat.click("Найти план")
+    chat.click("Ремонт")
+    chat.click("Вся категория: Ремонт")
+    chat.click("Малярные работы · 5 000,00 ₽")
+    chat.click("Внести ещё сумму")
+    saved = client.get("/v1/plans/" + plan["id"], headers=headers).json()
+    assert saved["paid_amount"] == "800.00"
+
+
 def test_bot_rejects_other_users_groups_and_stale_category(client, headers):
     chat = Chat(client, headers)
     assert chat.send("/start", actor=333)["messages"] == []
