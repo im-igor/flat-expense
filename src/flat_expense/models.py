@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     UniqueConstraint,
@@ -81,6 +82,33 @@ class Expense(Base):
         CheckConstraint("amount_minor > 0"),
         CheckConstraint("planned_amount_minor > 0", name="ck_expenses_planned_amount_positive"),
         Index("expense_owner_date", "owner_id", "paid_on"),
+    )
+
+
+class Document(Base):
+    """A private supporting file, stored with the accounting database.
+
+    A document has at most one direct target.  This deliberately avoids a
+    generic links table and preserves the application's simple plan model.
+    """
+
+    __tablename__ = "documents"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    expense_id: Mapped[str | None] = mapped_column(ForeignKey("expenses.id"), index=True)
+    plan_id: Mapped[str | None] = mapped_column(ForeignKey("plans.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(20), default="web")
+    note: Mapped[str] = mapped_column(String(500), default="")
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        CheckConstraint("size_bytes > 0 AND size_bytes <= 20971520"),
+        CheckConstraint("(expense_id IS NULL) OR (plan_id IS NULL)"),
+        CheckConstraint("source IN ('web', 'telegram', 'forwarded')"),
     )
 
 

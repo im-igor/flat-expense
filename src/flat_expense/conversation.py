@@ -717,9 +717,11 @@ def process_update(db, allowed_ids, update, ai=None):
                 reply = (
                     conversation.command(text) if text.startswith("/") else conversation.input(text)
                 )
+            elif msg.get("document") or msg.get("photo"):
+                return {"chat_id": owner, "messages": [], "callback_query_id": None}
             else:
                 reply = message(
-                    "В этой версии принимается текст. Запишите оплату через /expense; распознавание вложений появится на следующем этапе."
+                    "Поддерживаются текст, PDF, изображения, DOCX и XLSX."
                 )
         except (s.DomainError, ValidationError) as error:
             text = (

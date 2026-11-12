@@ -1,9 +1,11 @@
+import hashlib
 import secrets
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select, text
 
@@ -12,7 +14,7 @@ from flat_expense.config import Settings, settings
 from flat_expense.conversation import process_update
 from flat_expense.db import make_sessions
 from flat_expense.expense_ai import LocalExpenseAI
-from flat_expense.models import BotCursor, Expense, Plan
+from flat_expense.models import BotCursor, Document, Expense, Plan
 from flat_expense.schemas import (
     CategoryIn,
     CategoryRenameIn,
@@ -62,6 +64,57 @@ def create_app(config: Settings | None = None, sessions=None):
     def session():
         with sessions() as db, db.begin():
             yield db
+
+    async def document_body(request: Request) -> bytes:
+        length = request.headers.get("content-length")
+        if length and (not length.isdecimal() or int(length) > s.MAX_DOCUMENT_BYTES):
+            raise HTTPException(413, "Размер одного файла не должен превышать 20 МБ.")
+        body = await request.body()
+        if len(body) > s.MAX_DOCUMENT_BYTES:
+            raise HTTPException(413, "Размер одного файла не должен превышать 20 МБ.")
+        return body
+
+    def document_type(request: Request) -> str:
+        return request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+
+    def store_document(
+        db,
+        owner: int,
+        key: str,
+        filename: str,
+        note: str,
+        source: str,
+        target_type: str | None,
+        target_id: str | None,
+        content_type: str,
+        content: bytes,
+    ):
+        return s.once(
+            db,
+            owner,
+            key,
+            {
+                "action": "document.create",
+                "filename": filename,
+                "note": note,
+                "source": source,
+                "target_type": target_type,
+                "target_id": target_id,
+                "content_type": content_type,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            },
+            lambda: s.add_document(
+                db,
+                owner,
+                filename=filename,
+                content_type=content_type,
+                content=content,
+                source=source,
+                note=note,
+                target_type=target_type,
+                target_id=target_id,
+            ),
+        )
 
     @app.exception_handler(s.DomainError)
     async def domain_error(request, exc):
@@ -149,6 +202,28 @@ def create_app(config: Settings | None = None, sessions=None):
     @app.get("/v1/expenses/{identifier}")
     def get_expense(identifier: str, owner=Depends(actor), db=Depends(session)):
         return s.expense_view(db, s.owned(db, Expense, owner, identifier))
+
+    @app.get("/v1/expenses/{identifier}/documents")
+    def expense_documents(identifier: str, owner=Depends(actor), db=Depends(session)):
+        return s.list_documents(db, owner, "expense", identifier)
+
+    @app.post("/v1/expenses/{identifier}/documents")
+    async def upload_expense_document(
+        identifier: str,
+        request: Request,
+        filename: str = Query(min_length=1, max_length=255),
+        note: str = Query(default="", max_length=500),
+        idempotency_key: Annotated[str, Header()] = "",
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        if not idempotency_key:
+            raise HTTPException(422, "Укажите Idempotency-Key.")
+        content = await document_body(request)
+        return store_document(
+            db, owner, idempotency_key, filename, note, "web", "expense", identifier,
+            document_type(request), content,
+        )
 
     @app.post("/v1/expenses")
     def create_expense(
@@ -252,6 +327,72 @@ def create_app(config: Settings | None = None, sessions=None):
     @app.get("/v1/plans/{identifier}")
     def get_plan(identifier: str, owner=Depends(actor), db=Depends(session)):
         return s.plan_view(db, s.owned(db, Plan, owner, identifier))
+
+    @app.get("/v1/plans/{identifier}/documents")
+    def plan_documents(identifier: str, owner=Depends(actor), db=Depends(session)):
+        return s.list_documents(db, owner, "plan", identifier)
+
+    @app.post("/v1/plans/{identifier}/documents")
+    async def upload_plan_document(
+        identifier: str,
+        request: Request,
+        filename: str = Query(min_length=1, max_length=255),
+        note: str = Query(default="", max_length=500),
+        idempotency_key: Annotated[str, Header()] = "",
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        if not idempotency_key:
+            raise HTTPException(422, "Укажите Idempotency-Key.")
+        content = await document_body(request)
+        return store_document(
+            db, owner, idempotency_key, filename, note, "web", "plan", identifier,
+            document_type(request), content,
+        )
+
+    @app.get("/v1/documents/inbox")
+    def document_inbox(owner=Depends(actor), db=Depends(session)):
+        return s.list_documents(db, owner)
+
+    @app.put("/v1/documents/{identifier}/attach")
+    def attach_document(
+        identifier: str,
+        target_type: Literal["expense", "plan"],
+        target_id: str,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "document.attach", "id": identifier, "target_type": target_type, "target_id": target_id},
+            lambda: s.attach_document(db, owner, identifier, target_type, target_id),
+        )
+
+    @app.get("/v1/documents/{identifier}/content")
+    def document_content(identifier: str, owner=Depends(actor), db=Depends(session)):
+        item = s.owned(db, Document, owner, identifier)
+        disposition = "inline" if item.content_type in {"application/pdf", "image/jpeg", "image/png", "image/webp"} else "attachment"
+        encoded_name = quote(item.filename, safe="")
+        return Response(
+            item.content,
+            media_type=item.content_type,
+            headers={"Content-Disposition": f"{disposition}; filename*=UTF-8''{encoded_name}"},
+        )
+
+    @app.delete("/v1/documents/{identifier}")
+    def remove_document(
+        identifier: str,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db, owner, idempotency_key, {"action": "document.delete", "id": identifier},
+            lambda: s.delete_document(db, owner, identifier),
+        )
 
     @app.post("/v1/plans")
     def create_plan(
@@ -433,6 +574,26 @@ def create_app(config: Settings | None = None, sessions=None):
     @app.post("/internal/telegram/update", dependencies=[Depends(authorize)])
     def telegram(update: dict, db=Depends(session)):
         return process_update(db, config.allowed_ids, update, ai=app.state.expense_ai)
+
+    @app.post("/internal/telegram/documents", dependencies=[Depends(authorize)])
+    async def telegram_document(
+        request: Request,
+        filename: str = Query(min_length=1, max_length=255),
+        note: str = Query(default="", max_length=500),
+        source: Literal["telegram", "forwarded"] = Query(default="telegram"),
+        idempotency_key: Annotated[str, Header()] = "",
+        x_telegram_user_id: Annotated[int | None, Header()] = None,
+        db=Depends(session),
+    ):
+        if not idempotency_key:
+            raise HTTPException(422, "Укажите Idempotency-Key.")
+        if x_telegram_user_id not in config.allowed_ids:
+            raise HTTPException(403, "Доступ запрещён.")
+        content = await document_body(request)
+        return store_document(
+            db, x_telegram_user_id, idempotency_key, filename, note, source, None, None,
+            document_type(request), content,
+        )
 
     @app.get("/internal/telegram/cursor", dependencies=[Depends(authorize)])
     def cursor(db=Depends(session)):

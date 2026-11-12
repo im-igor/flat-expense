@@ -284,7 +284,9 @@ function updateChartTooltip(event) {
 function hideChartTooltip(){ $('#chart-tooltip')?.classList.add('hidden'); }
 function pagination(kind, count, page, totalText, pageCount = null) {
   const pages = pageCount ?? Math.max(1, Math.ceil(count / PAGE_SIZE));
-  return `<div class="table-foot"><span>${plural(count,'запись','записи','записей')}${totalText ? ' · ' + totalText : ''}</span><div class="pagination"><button class="text-button" data-action="page" data-kind="${kind}" data-page="${page-1}" ${page===0?'disabled':''}>← Назад</button><span>${page+1} / ${pages}</span><button class="text-button" data-action="page" data-kind="${kind}" data-page="${page+1}" ${page+1>=pages?'disabled':''}>Далее →</button></div></div>`;
+  const current = Math.min(Math.max(0, page), pages - 1);
+  const options = Array.from({length: pages}, (_, index) => `<option value="${index}" ${index === current ? 'selected' : ''}>${index + 1} из ${pages}</option>`).join('');
+  return `<div class="table-foot"><span>${plural(count,'запись','записи','записей')}${totalText ? ' · ' + totalText : ''}</span><div class="pagination"><button class="text-button" data-action="page" data-kind="${kind}" data-page="${current-1}" ${current===0?'disabled':''}>← Назад</button><label class="page-picker"><span class="screen-reader">Страница</span><select data-page-select data-kind="${kind}" aria-label="Перейти к странице">${options}</select></label><button class="text-button" data-action="page" data-kind="${kind}" data-page="${current+1}" ${current+1>=pages?'disabled':''}>Далее →</button></div></div>`;
 }
 function ledgerRows(filters=state.ledgerFilters) {
   const f=filters, search=f.search.toLocaleLowerCase('ru'), category=f.category2||f.category1;
@@ -627,6 +629,53 @@ async function closeEditor(force=false) {
   editing=null;
   return true;
 }
+function fileSize(bytes) {
+  return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} КБ` : `${(bytes / 1024 / 1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ`;
+}
+function documentRow(item, inbox=false) {
+  const source=item.source==='forwarded'?'переслано из Telegram':item.source==='telegram'?'Telegram':'веб';
+  return `<li class="document-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(source)} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div><div class="document-actions"><button type="button" class="text-button" data-action="open-document" data-id="${item.id}">${item.previewable?'Открыть':'Скачать'}</button>${inbox?'<button type="button" class="text-button" data-action="attach-document" data-id="'+item.id+'">Прикрепить</button>':''}<button type="button" class="text-button danger-text" data-action="delete-document" data-id="${item.id}">Удалить</button></div></li>`;
+}
+function documentContentType(file) {
+  if(file.type) return file.type;
+  const extension=file.name.toLocaleLowerCase('en').split('.').pop();
+  return {pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',heic:'image/heic',heif:'image/heif',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}[extension]||'application/octet-stream';
+}
+async function loadDocumentPanel(kind, identifier) {
+  const panel=$('#documents');
+  if(!panel) return;
+  try {
+    const [documents,inbox]=await Promise.all([request(`/v1/${kind==='expense'?'expenses':'plans'}/${identifier}/documents`),request('/v1/documents/inbox')]);
+    if(!editing||editing.kind!==kind||editing.item?.id!==identifier) return;
+    panel.innerHTML=`<h3>Документы</h3><p class="muted">PDF и изображения открываются в браузере. Размер файла — до 20 МБ.</p><ul class="document-list">${documents.length?documents.map(item=>documentRow(item)).join(''):'<li class="document-empty">Пока нет прикреплённых документов.</li>'}</ul><div class="document-upload"><input id="document-file" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.docx,.xlsx,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><input id="document-note" maxlength="500" placeholder="Подпись (необязательно)"><button type="button" class="button secondary" data-action="upload-document">Прикрепить файл</button></div>${inbox.length?`<h3 class="document-inbox-title">Документы из Telegram</h3><ul class="document-list">${inbox.map(item=>documentRow(item,true)).join('')}</ul>`:''}`;
+  } catch(error) { panel.innerHTML=`<p class="form-error">${esc(error.message)}</p>`; }
+}
+async function uploadDocument() {
+  if(!editing?.item?.id || !['expense','plan'].includes(editing.kind)) throw new Error('Сначала сохраните запись.');
+  const file=$('#document-file')?.files?.[0];
+  if(!file) throw new Error('Выберите файл.');
+  if(file.size>20*1024*1024) throw new Error('Размер одного файла не должен превышать 20 МБ.');
+  const note=$('#document-note')?.value.trim()||'';
+  const type=editing.kind==='expense'?'expenses':'plans';
+  const url=`/v1/${type}/${editing.item.id}/documents?`+new URLSearchParams({filename:file.name,note});
+  const response=await fetch(url,{method:'POST',credentials:'same-origin',headers:{'X-Flat-Expense':'web','Idempotency-Key':requestKey(),'Content-Type':documentContentType(file)},body:file});
+  let result;try{result=await response.json();}catch{throw new Error('Сервер вернул непонятный ответ.');}
+  if(!response.ok)throw new Error(result.detail||'Не удалось прикрепить файл.');
+  notify('Документ прикреплён');
+  await loadDocumentPanel(editing.kind,editing.item.id);
+}
+async function attachDocument(identifier) {
+  if(!editing?.item?.id || !['expense','plan'].includes(editing.kind)) throw new Error('Откройте оплату или план.');
+  await mutation(`/v1/documents/${identifier}/attach?`+new URLSearchParams({target_type:editing.kind,target_id:editing.item.id}),'PUT',{});
+  notify('Документ прикреплён');
+  await loadDocumentPanel(editing.kind,editing.item.id);
+}
+async function deleteDocument(identifier) {
+  if(!await confirmAction('Удалить документ?','Файл будет удалён из рабочего учёта без возможности восстановления.','Удалить')) return;
+  await mutation(`/v1/documents/${identifier}`,'DELETE',{});
+  notify('Документ удалён');
+  if(editing?.item?.id&&['expense','plan'].includes(editing.kind)) await loadDocumentPanel(editing.kind,editing.item.id);
+}
 function openEditor(kind, item=null, focusField='') {
   if (!state.ready) return;
   editing={kind,item,initial:''};
@@ -663,9 +712,10 @@ function openEditor(kind, item=null, focusField='') {
     fields=(item?.id?field('category_group','Группа',`<input id="category_group" value="${esc(parent?.name||'Основная категория')}" disabled>`,'Уровень категории после создания не меняется.',true):field('parent_id','Группа',`<select id="parent_id" name="parent_id"><option value="">Новая основная категория</option>${state.categories.filter(c=>!c.parent_id).map(c=>`<option value="${c.id}" ${c.id===parentId?'selected':''}>Подкатегория: ${esc(c.name)}</option>`).join('')}</select>`,'',true))+field('name','Название',`<input id="name" name="name" required maxlength="120" placeholder="Например, Материалы" value="${esc(item?.name||'')}">`,'',true);
   }
   const readOnly=!!item&&(item.deleted||item.archived);
+  const documentSection=item?.id&&(kind==='expense'||kind==='plan')?'<section id="documents" class="documents"><p class="muted">Загружаю документы…</p></section>':'';
   const categoryRemoval=kind==='category'&&item?`<div class="category-danger"><h3>Удаление и замена</h3>${item.child_count?'<p>У этой группы есть подкатегории. Сначала удалите или замените их.</p>':item.expense_count||item.plan_count?`<p>Категория используется: ${plural(item.expense_count,'оплата','оплаты','оплат')} и ${plural(item.plan_count,'план','плана','планов')}. Выберите, куда их перенести.</p><select id="replacement_category"><option value="">Выберите категорию для замены</option>${state.categories.filter(c=>c.id!==item.id&&!c.child_count).map(c=>`<option value="${c.id}">${esc(c.path)}</option>`).join('')}</select><button type="button" class="button danger" data-action="remove-category" data-id="${item.id}">Заменить везде и удалить</button>`:'<p>Категория нигде не используется.</p><button type="button" class="button danger" data-action="remove-category" data-id="'+item.id+'">Удалить категорию</button>'}</div>`:'';
   $('#editor-content').innerHTML=`<form id="record-form" class="editor-form"><div id="form-error" class="form-error hidden" role="alert"></div><div class="form-grid">${fields}</div>
-    ${categoryRemoval}
+    ${categoryRemoval}${documentSection}
     <div class="form-actions">${item?.id&&kind!=='category'&&kind!=='plan-payment'&&kind!=='plan-paid-amount'?`<button type="button" class="text-button danger-text delete-button" data-action="${kind==='expense'?(item.deleted?'restore-expense':'delete-expense'):'delete-plan'}" data-id="${item.id}">${kind==='expense'?(item.deleted?'Восстановить':'Удалить'):'Удалить'}</button>`:''}<button type="button" class="button secondary" data-action="close-dialog">${readOnly?'Закрыть':'Отмена'}</button>${readOnly?'':'<button type="submit" class="button primary" id="save-record">Сохранить</button>'}</div></form>`;
   if (readOnly) $('#record-form').querySelectorAll('input,textarea,select,.category-create-toggle,.inline-category button').forEach(el=>el.disabled=true);
   if(kind==='expense'&&!item){
@@ -675,6 +725,7 @@ function openEditor(kind, item=null, focusField='') {
   }
   editing.initial=formSnapshot();
   $('#editor').showModal();
+  if(documentSection) loadDocumentPanel(kind,item.id);
   if(focusField&&!readOnly)requestAnimationFrame(()=>{
     const control=document.getElementById(focusField);
     if(!control||control.disabled)return;
@@ -733,7 +784,7 @@ async function saveForm(event) {
     await mutation(path,method,data);
     await closeEditor(true);
     notify(current.kind==='expense'||current.kind==='plan-payment'||current.kind==='plan-paid-amount'?'Оплата сохранена':current.kind==='plan'?'План сохранён':current.item?'Категория переименована':'Категория добавлена');
-    try { await loadData(); } catch(error) { showError(new Error('Запись сохранена, но обновить список не удалось. Нажмите «Обновить список». '+error.message)); }
+    try { await loadData(); } catch(error) { showError(new Error('Запись сохранена, но данные не удалось обновить. Перезагрузите страницу. '+error.message)); }
   } catch(error) {showFormError(error);}
   finally {button.disabled=false;button.textContent='Сохранить';}
 }
@@ -822,7 +873,7 @@ async function handleAction(event) {
   const target=event.target.closest('[data-action]');
   if (!target||target.disabled) return;
   const {action,id}=target.dataset;
-  if (!state.ready&&action!=='refresh') return;
+  if (!state.ready) return;
   try {
     if (action==='new-expense') openEditor('expense');
     else if (action==='new-plan') openEditor('plan');
@@ -844,6 +895,10 @@ async function handleAction(event) {
     else if (action==='select-filtered-plans') {state.ledgerSelectedPlanIds=new Set(selectablePlanRows(ledgerRows()).map(row=>row.item.id));renderLedger();}
     else if (action==='clear-selected-plans') {state.ledgerSelectedPlanIds.clear();renderLedger();}
     else if (action==='bulk-move-plans') await bulkMovePlans();
+    else if (action==='upload-document') await uploadDocument();
+    else if (action==='attach-document') await attachDocument(id);
+    else if (action==='delete-document') await deleteDocument(id);
+    else if (action==='open-document') window.open(`/v1/documents/${encodeURIComponent(id)}/content`,'_blank','noopener');
     else if (action==='close-dialog') await closeEditor();
     else if (action==='delete-plan') await deletePlan(id);
     else if (['delete-expense','restore-expense','archive-plan','restore-plan'].includes(action)) await toggleRecord(action,id);
@@ -854,10 +909,7 @@ async function handleAction(event) {
     else if (action==='logout') {
       await request('/web/logout',{method:'POST'}); location.assign('/login');
     }
-    else if (action==='refresh') {
-      target.disabled=true;
-      try {if(state.today)await loadData();else await start();notify('Данные обновлены');} finally {target.disabled=false;}
-    } else if (action==='refresh-loan-rates') {
+    else if (action==='refresh-loan-rates') {
       if(!await confirmAction('Обновить ставки?','Прошедшие периоды получат ставку ЦБ на дату платежа, будущие — последнюю известную ставку как прогноз.','Обновить'))return;
       target.disabled=true;
       try{const result=await mutation('/v1/loan/key-rates','POST',{});await loadData();notify(`Ставки обновлены: ${result.actual} фактических, ${result.forecast} прогнозных`);}finally{target.disabled=false;}
@@ -925,6 +977,11 @@ document.addEventListener('scroll',hideChartTooltip,true);
 document.addEventListener('submit',event=>{if(event.target.id==='record-form')saveForm(event);});
 document.addEventListener('input',event=>{if(event.target.type==='search')updateFilter(event);});
 document.addEventListener('change',async event=>{
+  if(event.target.matches('[data-page-select]')){
+    state[event.target.dataset.kind+'Page']=Number(event.target.value);
+    render();
+    return;
+  }
   if(event.target.matches('.ledger-plan-select')){
     const id=event.target.dataset.planId;
     if(event.target.checked)state.ledgerSelectedPlanIds.add(id);else state.ledgerSelectedPlanIds.delete(id);

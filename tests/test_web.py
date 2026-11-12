@@ -267,6 +267,16 @@ def test_ledger_pagination_keeps_month_groups_together(browser):
     assert "page.length+group.rows.length>PAGE_SIZE" in asset
     assert "pages[state.ledgerPage]" in asset
     assert "pages.length)}" in asset
+    assert "data-page-select" in asset
+    assert "Перейти к странице" in asset
+    assert "const current = Math.min(Math.max(0, page), pages - 1)" in asset
+
+
+def test_footer_does_not_offer_a_manual_data_reload(browser):
+    page = browser.get("/").text
+    asset = browser.get("/assets/app.js").text
+    assert "Обновить список" not in page
+    assert 'data-action="refresh"' not in asset
 
 
 def test_ledger_has_dependent_category_filters(browser):

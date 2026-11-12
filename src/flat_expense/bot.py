@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import mimetypes
 
 import httpx
 from aiogram import Bot
@@ -26,6 +27,58 @@ TRANSIENT_TELEGRAM_ERRORS = (
     TelegramNetworkError,
     TelegramServerError,
 )
+MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+
+
+def incoming_file(update):
+    message = update.get("message") or {}
+    if document := message.get("document"):
+        filename = document.get("file_name") or f"document-{message.get('message_id', 'file')}"
+        content_type = document.get("mime_type") or mimetypes.guess_type(filename)[0]
+        return document, filename, content_type
+    if photos := message.get("photo"):
+        return photos[-1], f"photo-{message.get('message_id', 'file')}.jpg", "image/jpeg"
+    return None
+
+
+async def store_incoming_file(bot, api, update):
+    found = incoming_file(update)
+    if found is None:
+        return None
+    file_meta, filename, content_type = found
+    message = update["message"]
+    if file_meta.get("file_size", 0) > MAX_DOCUMENT_BYTES:
+        return "Файл больше 20 МБ и не был сохранён."
+    if not content_type:
+        return "Не удалось определить тип файла. Отправьте PDF, изображение, DOCX или XLSX."
+    try:
+        remote = await bot.get_file(file_meta["file_id"])
+        downloaded = await bot.download_file(remote.file_path)
+        content = downloaded.read()
+    except TRANSIENT_TELEGRAM_ERRORS:
+        raise
+    if len(content) > MAX_DOCUMENT_BYTES:
+        return "Файл больше 20 МБ и не был сохранён."
+    source = "forwarded" if (message.get("forward_origin") or message.get("forward_from")) else "telegram"
+    response = await api.post(
+        "/internal/telegram/documents",
+        params={"filename": filename, "note": (message.get("caption") or "")[:500], "source": source},
+        content=content,
+        headers={
+            "Content-Type": content_type,
+            "X-Telegram-User-Id": str(message["from"]["id"]),
+            "Idempotency-Key": f"tgdoc:{update['update_id']}:{file_meta['file_id']}",
+        },
+    )
+    if response.is_success:
+        return "Документ сохранён. Откройте нужную оплату или план в веб-интерфейсе и прикрепите его из блока «Документы из Telegram»."
+    if response.status_code < 500:
+        try:
+            detail = response.json().get("detail", "Не удалось сохранить файл.")
+        except ValueError:
+            detail = "Не удалось сохранить файл."
+        return str(detail)
+    response.raise_for_status()
 
 
 async def run():
@@ -89,6 +142,15 @@ async def run():
                     )
                     result.raise_for_status()
                     payload = result.json()
+                    if (
+                        update.message
+                        and update.message.chat.type == "private"
+                        and update.message.from_user.id in config.allowed_ids
+                        and (update.message.document or update.message.photo)
+                    ):
+                        status = await store_incoming_file(bot, api, update.model_dump(mode="json", by_alias=True, exclude_none=True))
+                        if status:
+                            payload["messages"].append({"text": status})
                     if payload.get("callback_query_id"):
                         try:
                             await bot.answer_callback_query(payload["callback_query_id"])

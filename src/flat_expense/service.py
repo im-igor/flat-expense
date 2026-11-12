@@ -11,10 +11,30 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from flat_expense import cbr
-from flat_expense.models import Audit, Category, Expense, LoanPeriod, Plan, RequestLog, utcnow
+from flat_expense.models import (
+    Audit,
+    Category,
+    Document,
+    Expense,
+    LoanPeriod,
+    Plan,
+    RequestLog,
+    utcnow,
+)
 from flat_expense.schemas import ExpenseIn, PlanIn
 
 MOSCOW = ZoneInfo("Europe/Moscow")
+MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+ALLOWED_DOCUMENT_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "image/heic",
+    "image/heif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
 
 
 class DomainError(Exception):
@@ -277,6 +297,111 @@ def expense_view(db: Session, item: Expense) -> dict:
         "deleted": item.deleted,
         "version": item.version,
     }
+
+
+def document_view(item: Document) -> dict:
+    return {
+        "id": item.id,
+        "filename": item.filename,
+        "content_type": item.content_type,
+        "size_bytes": item.size_bytes,
+        "sha256": item.sha256,
+        "source": item.source,
+        "note": item.note,
+        "expense_id": item.expense_id,
+        "plan_id": item.plan_id,
+        "created_at": item.created_at.isoformat(),
+        "previewable": item.content_type in {"application/pdf", "image/jpeg", "image/png", "image/webp"},
+    }
+
+
+def document_target(db: Session, owner: int, target_type: str, target_id: str):
+    if target_type == "expense":
+        return owned(db, Expense, owner, target_id)
+    if target_type == "plan":
+        return owned(db, Plan, owner, target_id)
+    raise DomainError("Документ можно прикрепить только к оплате или плану.")
+
+
+def add_document(
+    db: Session,
+    owner: int,
+    *,
+    filename: str,
+    content_type: str,
+    content: bytes,
+    source: str,
+    note: str = "",
+    target_type: str | None = None,
+    target_id: str | None = None,
+) -> dict:
+    if not filename or len(filename) > 255:
+        raise DomainError("Укажите имя файла длиной до 255 символов.")
+    if any(ord(char) < 32 for char in filename):
+        raise DomainError("Имя файла содержит недопустимые символы.")
+    if content_type not in ALLOWED_DOCUMENT_TYPES:
+        raise DomainError("Поддерживаются PDF, изображения JPG/PNG/WebP/HEIC и файлы DOCX/XLSX.", 415)
+    if not content:
+        raise DomainError("Пустой файл нельзя прикрепить.")
+    if len(content) > MAX_DOCUMENT_BYTES:
+        raise DomainError("Размер одного файла не должен превышать 20 МБ.", 413)
+    if source not in {"web", "telegram", "forwarded"}:
+        raise DomainError("Неизвестный источник документа.")
+    if len(note) > 500:
+        raise DomainError("Подпись к документу не должна превышать 500 символов.")
+    fields = {"expense_id": None, "plan_id": None}
+    if (target_type is None) != (target_id is None):
+        raise DomainError("Для привязки документа укажите и тип, и запись.")
+    if target_type is not None:
+        document_target(db, owner, target_type, target_id)
+        fields[target_type + "_id"] = target_id
+    item = Document(
+        owner_id=owner,
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        source=source,
+        note=note.strip(),
+        content=content,
+        **fields,
+    )
+    db.add(item)
+    db.flush()
+    result = document_view(item)
+    audit(db, owner, "document", item.id, "create", None, result)
+    return result
+
+
+def list_documents(db: Session, owner: int, target_type: str | None = None, target_id: str | None = None):
+    query = select(Document).where(Document.owner_id == owner)
+    if target_type is not None:
+        document_target(db, owner, target_type, target_id)
+        query = query.where(getattr(Document, target_type + "_id") == target_id)
+    else:
+        query = query.where(Document.expense_id.is_(None), Document.plan_id.is_(None))
+    return [document_view(item) for item in db.scalars(query.order_by(Document.created_at.desc(), Document.id))]
+
+
+def attach_document(db: Session, owner: int, identifier: str, target_type: str, target_id: str) -> dict:
+    item = owned(db, Document, owner, identifier, lock=True)
+    if item.expense_id or item.plan_id:
+        raise DomainError("Документ уже привязан к записи.", 409)
+    document_target(db, owner, target_type, target_id)
+    before = document_view(item)
+    setattr(item, target_type + "_id", target_id)
+    db.flush()
+    result = document_view(item)
+    audit(db, owner, "document", item.id, "attach", before, result)
+    return result
+
+
+def delete_document(db: Session, owner: int, identifier: str) -> dict:
+    item = owned(db, Document, owner, identifier, lock=True)
+    before = document_view(item)
+    db.delete(item)
+    audit(db, owner, "document", item.id, "delete", before, {"deleted": True})
+    return {"id": identifier, "deleted": True}
 
 
 def audit(db: Session, owner: int, entity: str, identifier: str, action: str, before, after):
@@ -554,6 +679,12 @@ def apply_expense_to_plan(
         "paid" if planned is not None and plan.paid_amount_minor >= planned else "partial"
     )
     plan.version += 1
+    documents = list(
+        db.scalars(select(Document).where(Document.owner_id == owner, Document.expense_id == expense.id))
+    )
+    for document in documents:
+        document.expense_id = None
+        document.plan_id = plan.id
     db.flush()
     result = plan_view(db, plan)
     audit(db, owner, "plan", plan.id, "apply_expense", plan_before, result)
@@ -594,6 +725,10 @@ def delete_plan(db: Session, owner: int, identifier: str, version: int) -> dict:
     item = owned(db, Plan, owner, identifier, lock=True)
     if item.version != version:
         raise DomainError("План уже изменён. Откройте его заново.", 409)
+    if db.scalar(
+        select(func.count()).select_from(Document).where(Document.owner_id == owner, Document.plan_id == item.id)
+    ):
+        raise DomainError("Сначала удалите прикреплённые документы.", 409)
     before = plan_view(db, item)
     result = {"id": item.id, "deleted": True}
     db.delete(item)

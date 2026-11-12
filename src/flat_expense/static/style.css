@@ -161,3 +161,23 @@ td.num .inline-edit { text-align: right; }
   .app-shell .toolbar { padding: 12px; gap: 8px; }
   .app-shell .toolbar input[type=search] { max-width: none; }
 }
+
+.documents { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.documents h3 { font-size: 13px; margin-bottom: 6px; }
+.documents > .muted { font-size: 11px; }
+.document-list { list-style: none; margin: 12px 0; padding: 0; border-top: 1px solid #edf0e9; }
+.document-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 11px 0; border-bottom: 1px solid #edf0e9; }
+.document-info { min-width: 0; }
+.document-info strong, .document-info small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-info strong { font-size: 12px; }
+.document-info small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.document-actions { display: flex; gap: 9px; flex-shrink: 0; }
+.document-actions .text-button { font-size: 11px; }
+.document-empty { padding: 12px 0; color: var(--muted); font-size: 11px; }
+.document-upload { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 1fr) auto; gap: 8px; align-items: center; }
+.document-upload input { min-width: 0; font-size: 11px; padding: 8px; }
+.document-inbox-title { margin-top: 22px; }
+.pagination { display: grid; grid-template-columns: 66px 96px 66px; gap: 10px; align-items: center; justify-content: end; }
+.pagination .text-button { min-width: 66px; white-space: nowrap; }
+.page-picker select { min-width: 96px; min-height: 32px; padding: 6px 8px; font-size: 11px; }
+@media (max-width: 600px) { .document-upload { grid-template-columns: 1fr; } .document-row { align-items: flex-start; flex-direction: column; } }
