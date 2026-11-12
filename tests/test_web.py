@@ -305,6 +305,14 @@ def test_ledger_shows_paid_values_missing_budgets_and_filtered_summary(browser):
     assert "<th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th>" in asset
 
 
+def test_finalized_plan_uses_the_paid_status_and_row_style(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert "if (['paid','finalized'].includes(plan.payment_status)) return '<span class=\"badge paid\">Оплачено</span>';" in asset
+    assert "const closed=['paid','finalized'].includes(item.payment_status);" in asset
+    assert "closed?'paid-row':''" in asset
+
+
 def test_ledger_removes_cumulative_month_totals(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text

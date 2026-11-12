@@ -181,8 +181,7 @@ function categoryPath(id) { return state.categories.find(c => c.id === id)?.path
 function planAmount(plan) { return plan.planned_amount ?? plan.agreed ?? plan.expected; }
 function planStatus(plan) {
   if (plan.archived) return '<span class="badge gray">В архиве</span>';
-  if (plan.payment_status === 'paid') return '<span class="badge paid">Оплачено</span>';
-  if (plan.payment_status === 'finalized') return '<span class="badge gray">Финализировано</span>';
+  if (['paid','finalized'].includes(plan.payment_status)) return '<span class="badge paid">Оплачено</span>';
   if (plan.payment_status === 'partial') return '<span class="badge amber">Частично оплачено</span>';
   if (planAmount(plan) === null) return '<span class="badge amber">Без оценки</span>';
   if (plan.due_month && plan.due_month.slice(0,7) < state.today.slice(0,7)) return '<span class="badge amber">Перенести месяц</span>';
@@ -438,9 +437,10 @@ function ledgerRowMarkup(kind,item) {
   }
   const planCell=item.planned_amount===null?`<td class="num budget-missing-cell">${editableValue('plan',item,'expected','Не заложено','inline-edit-warning')}</td>`:`<td class="num">${editableValue('plan',item,'expected',rub(item.planned_amount))}</td>`;
   const select=item.archived?'':`<input class="ledger-plan-select" type="checkbox" data-plan-id="${item.id}" aria-label="Выбрать план: ${esc(item.title)}" ${state.ledgerSelectedPlanIds.has(item.id)?'checked':''}>`;
+  const closed=['paid','finalized'].includes(item.payment_status);
   const actions=item.archived?`<button class="text-button" data-action="restore-plan" data-id="${item.id}">Вернуть</button>`:`${cents(item.paid_amount)>0n?`<button class="text-button" data-action="edit-plan-paid-amount" data-id="${item.id}">Изменить факт</button>`:''}${['paid','finalized'].includes(item.payment_status)?'':`<button class="text-button" data-action="record-plan-payment" data-id="${item.id}">Внести оплату</button><button class="text-button" data-action="finalize-plan" data-id="${item.id}">Финализировать</button>`}<button class="text-button" data-action="edit-plan" data-id="${item.id}">Изменить</button>`;
   const acceptsExpense=!item.archived&&!['paid','finalized'].includes(item.payment_status);
-  return `<tr class="${item.archived?'inactive-row':''}${acceptsExpense?' plan-drop-target':''}" ${acceptsExpense?`data-plan-id="${item.id}" title="Перетащите сюда неразобранную оплату"`:''}><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
+  return `<tr class="${item.archived?'inactive-row':closed?'paid-row':''}${acceptsExpense?' plan-drop-target':''}" ${acceptsExpense?`data-plan-id="${item.id}" title="Перетащите сюда неразобранную оплату"`:''}><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
 }
 function ledgerSummary(rows) {
   let paid=0n,plan=0n;

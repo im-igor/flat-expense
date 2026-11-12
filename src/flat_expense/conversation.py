@@ -48,7 +48,7 @@ def plan_card(item):
         "planned": "План",
         "partial": "Частично оплачено",
         "paid": "Оплачено",
-        "finalized": "Финализировано",
+        "finalized": "Оплачено",
     }.get(item.get("payment_status"), "План")
     return (
         f"{'Архив' if item['archived'] else 'План'}: {item['title']}\n{item['category']}\n"
