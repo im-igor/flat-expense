@@ -2,7 +2,7 @@
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const esc = (value = '') => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {categories: [], expenses: [], plans: [], loan: [], today: '', moveMonth: '2027-08', view: 'overview', ready: false, report: null, reportSequence: 0, loadSequence: 0, chartLoanMode: 'with', start: '', end: '', expensePage: 0, planPage: 0, ledgerPage: 0, ledgerAutoPosition: false, ledgerSelectedPlanIds: new Set(), expenseFilters: {search:'', category:'', month:'', deleted:false}, planFilters: {search:'', category:'', month:'', status:'', archived:false}, ledgerFilters: {search:'', category1:'', category2:'', month:'', loan:false, inactive:false}};
+const state = {categories: [], expenses: [], plans: [], loan: [], today: '', moveMonth: '2027-08', view: 'overview', ready: false, report: null, reportSequence: 0, loadSequence: 0, chartLoanMode: 'with', start: '', end: '', expensePage: 0, planPage: 0, ledgerPage: 0, ledgerAutoPosition: false, ledgerSelectedPlanIds: new Set(), expenseFilters: {search:'', category:'', month:'', deleted:false}, planFilters: {search:'', category:'', month:'', status:'', archived:false}, ledgerFilters: {search:'', category1:'', category2:'', month:'', loan:false, overdue:false, inactive:false}};
 let editing = null;
 let pendingRequest = null;
 let toastTimer;
@@ -287,12 +287,19 @@ function pagination(kind, count, page, totalText, pageCount = null) {
   const options = Array.from({length: pages}, (_, index) => `<option value="${index}" ${index === current ? 'selected' : ''}>${index + 1} из ${pages}</option>`).join('');
   return `<div class="table-foot"><span>${plural(count,'запись','записи','записей')}${totalText ? ' · ' + totalText : ''}</span><div class="pagination"><button class="text-button" data-action="page" data-kind="${kind}" data-page="${current-1}" ${current===0?'disabled':''}>← Назад</button><label class="page-picker"><span class="screen-reader">Страница</span><select data-page-select data-kind="${kind}" aria-label="Перейти к странице">${options}</select></label><button class="text-button" data-action="page" data-kind="${kind}" data-page="${current+1}" ${current+1>=pages?'disabled':''}>Далее →</button></div></div>`;
 }
+function isPastUnpaidPlan(plan) {
+  return !plan.archived && !['paid','finalized'].includes(plan.payment_status) && !!plan.due_month && plan.due_month.slice(0,7)<state.today.slice(0,7);
+}
+function pastUnpaidPlanSummary() {
+  const plans=state.plans.filter(isPastUnpaidPlan);
+  return {plans, amount:plans.reduce((sum,plan)=>sum+cents(plan.remaining_amount),0n), unpriced:plans.filter(plan=>plan.remaining_amount===null).length};
+}
 function ledgerRows(filters=state.ledgerFilters) {
   const f=filters, search=f.search.toLocaleLowerCase('ru'), category=f.category2||f.category1;
-  const expenses=state.expenses.filter(e=>(f.inactive||!e.deleted)&&categoryMatches(e,category)&&(!f.month||e.paid_on.startsWith(f.month))&&(!search||[e.description,e.note,e.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(e=>({kind:'expense',date:e.paid_on,item:e}));
-  const plans=state.plans.filter(p=>(f.inactive||!p.archived)&&categoryMatches(p,category)&&(!f.month||p.due_month?.startsWith(f.month))&&(!search||[p.title,p.note,p.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(p=>({kind:'plan',date:p.due_month?.slice(0,10)||'9999-12-31',item:p}));
+  const expenses=f.overdue?[]:state.expenses.filter(e=>(f.inactive||!e.deleted)&&categoryMatches(e,category)&&(!f.month||e.paid_on.startsWith(f.month))&&(!search||[e.description,e.note,e.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(e=>({kind:'expense',date:e.paid_on,item:e}));
+  const plans=state.plans.filter(p=>(f.overdue?isPastUnpaidPlan(p):(f.inactive||!p.archived))&&categoryMatches(p,category)&&(!f.month||p.due_month?.startsWith(f.month))&&(!search||[p.title,p.note,p.category].join(' ').toLocaleLowerCase('ru').includes(search))).map(p=>({kind:'plan',date:p.due_month?.slice(0,10)||'9999-12-31',item:p}));
   const loanCategoryMatches=(!f.category1||f.category1===LOAN_CATEGORY_ID)&&(!f.category2||f.category2===LOAN_PAYMENT_CATEGORY_ID);
-  const loan=f.loan&&loanCategoryMatches?state.loan.filter(row=>(!f.month||row.payment_date.startsWith(f.month))&&(!search||`займ взнос платёж ${row.period_index}`.includes(search))).map(row=>({kind:'loan',date:row.payment_date,item:row})):[];
+  const loan=!f.overdue&&f.loan&&loanCategoryMatches?state.loan.filter(row=>(!f.month||row.payment_date.startsWith(f.month))&&(!search||`займ взнос платёж ${row.period_index}`.includes(search))).map(row=>({kind:'loan',date:row.payment_date,item:row})):[];
   const rows=[...expenses,...loan,...plans];
   const order={expense:0,loan:1,plan:2};
   return rows.sort((a,b)=>a.date.localeCompare(b.date)||order[a.kind]-order[b.kind]||a.item.id.localeCompare(b.item.id));
@@ -383,7 +390,7 @@ function ledgerPages(rows) {
 }
 function ledgerHasDefaultFilters() {
   const f=state.ledgerFilters;
-  return !f.search&&!f.category1&&!f.category2&&!f.month&&!f.loan&&!f.inactive;
+  return !f.search&&!f.category1&&!f.category2&&!f.month&&!f.loan&&!f.overdue&&!f.inactive;
 }
 function ledgerCurrentMonthPage(pages) {
   const month=state.today.slice(0,7);
@@ -498,6 +505,7 @@ async function bulkMovePlans() {
 }
 function renderLedger() {
   const f=state.ledgerFilters, rows=ledgerRows();
+  const pastUnpaid=pastUnpaidPlanSummary();
   const roots=state.categories.filter(category=>!category.parent_id);
   const children=f.category1===LOAN_CATEGORY_ID?[{id:LOAN_PAYMENT_CATEGORY_ID,name:'Взнос'}]:state.categories.filter(category=>category.parent_id===f.category1);
   const pages=ledgerPages(rows);
@@ -517,10 +525,10 @@ function renderLedger() {
   const balance=ledgerBalance(rows);
   const balanceLabel=balance.difference>0n?'Экономия':balance.difference<0n?'Перерасход':'Точно по плану';
   const balanceValue=balance.difference<0n?rub(-balance.difference):rub(balance.difference);
-  $('#view-ledger').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="ledger-search">Поиск</label><input id="ledger-search" type="search" placeholder="Найти оплату или план" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="ledger-category1">Категория 1</label><select id="ledger-category1" aria-label="Категория 1"><option value="">Все категории 1</option>${roots.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category1?'selected':''}>${esc(category.name)}</option>`).join('')}<option value="${LOAN_CATEGORY_ID}" ${f.category1===LOAN_CATEGORY_ID?'selected':''}>Заём</option></select><label class="screen-reader" for="ledger-category2">Категория 2</label><select id="ledger-category2" aria-label="Категория 2" ${f.category1?'':'disabled'}><option value="">Все категории 2</option>${children.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category2?'selected':''}>${esc(category.name)}</option>`).join('')}</select><label class="filter-label"><input type="checkbox" id="ledger-loan" ${f.loan?'checked':''}>＋ заём</label><label class="screen-reader" for="ledger-month">Месяц</label><input id="ledger-month" type="month" value="${f.month}"><label class="filter-label"><input type="checkbox" id="ledger-inactive" ${f.inactive?'checked':''}>Показать удалённые и архивные</label></div>
+  $('#view-ledger').innerHTML=`<article class="card"><div class="toolbar"><label class="screen-reader" for="ledger-search">Поиск</label><input id="ledger-search" type="search" placeholder="Найти оплату или план" value="${esc(f.search)}" maxlength="200"><label class="screen-reader" for="ledger-category1">Категория 1</label><select id="ledger-category1" aria-label="Категория 1"><option value="">Все категории 1</option>${roots.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category1?'selected':''}>${esc(category.name)}</option>`).join('')}<option value="${LOAN_CATEGORY_ID}" ${f.category1===LOAN_CATEGORY_ID?'selected':''}>Заём</option></select><label class="screen-reader" for="ledger-category2">Категория 2</label><select id="ledger-category2" aria-label="Категория 2" ${f.category1?'':'disabled'}><option value="">Все категории 2</option>${children.map(category=>`<option value="${esc(category.id)}" ${category.id===f.category2?'selected':''}>${esc(category.name)}</option>`).join('')}</select><label class="filter-label"><input type="checkbox" id="ledger-loan" ${f.loan?'checked':''}>＋ заём</label><label class="filter-label" title="Открытые планы с месяцем раньше текущего"><input type="checkbox" id="ledger-overdue" ${f.overdue?'checked':''}>Неоплаченные из прошлого · ${rub(pastUnpaid.amount)}${pastUnpaid.unpriced?` + ${pastUnpaid.unpriced} без оценки`:''}</label><label class="screen-reader" for="ledger-month">Месяц</label><input id="ledger-month" type="month" value="${f.month}"><label class="filter-label"><input type="checkbox" id="ledger-inactive" ${f.inactive?'checked':''}>Показать удалённые и архивные</label></div>
   ${ledgerBulkControls(rows)}
   ${reviewDropTargets()}
-  <div class="ledger-summary"><div><span>Итоги отображённых строк</span><small>${f.loan?'С учётом взносов по займу':'Без взносов по займу'}</small></div><div><span>Оплачено до сегодня</span><strong>${rub(summary.paid)}</strong></div><div><span>План</span><strong>${rub(summary.plan)}</strong></div><div><span>${balanceLabel}</span><strong class="${balance.difference<0n?'ledger-overrun':''}">${balance.count?balanceValue:'—'}</strong><small>${balance.count?`План ${rub(balance.plan)} − факт ${rub(balance.fact)} · ${plural(balance.count,'завершённая позиция','завершённые позиции','завершённых позиций')}`:'Нет завершённых позиций'}</small></div></div>
+  <div class="ledger-summary"><div><span>Итоги отображённых строк</span><small>${f.overdue?'Только неоплаченные планы из прошлых месяцев':f.loan?'С учётом взносов по займу':'Без взносов по займу'}</small></div><div><span>Оплачено до сегодня</span><strong>${rub(summary.paid)}</strong></div><div><span>План</span><strong>${rub(summary.plan)}</strong></div><div><span>${balanceLabel}</span><strong class="${balance.difference<0n?'ledger-overrun':''}">${balance.count?balanceValue:'—'}</strong><small>${balance.count?`План ${rub(balance.plan)} − факт ${rub(balance.fact)} · ${plural(balance.count,'завершённая позиция','завершённые позиции','завершённых позиций')}`:'Нет завершённых позиций'}</small></div></div>
   ${visible.length?`<div class="table-scroll"><table class="ledger-table"><thead><tr><th><span class="screen-reader">Выбрать план</span></th><th>Дата</th><th>Категория 1</th><th>Категория 2</th><th>Описание</th><th class="num">План</th><th class="num">Факт, цена</th><th class="num">Оплачено</th><th class="num">Осталось</th><th>Состояние</th><th>Примечание</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`:empty('Записи не найдены','Измените фильтры или добавьте первую оплату.','new-expense','Записать оплату')}
   ${pagination('ledger',rows.length,state.ledgerPage,'оплачено до сегодня '+rub(summary.paid)+' · план '+rub(summary.plan),pages.length)}<p class="small-summary">Все строки отсортированы по возрастанию даты. Страница заканчивается только между месяцами, поэтому число строк на странице может отличаться. В заголовке каждого месяца показаны суммы оплат и остатка открытых планов. Оплата выбранного плана обновляет его строку.</p></article>`;
 }
@@ -876,7 +884,7 @@ function dismissCategorySuggestion(kind,id,categoryId) {
   notify('Рекомендация скрыта');
 }
 function setPlanFilter(status) {
-  state.ledgerFilters={search:'',category1:'',category2:'',month:'',loan:false,inactive:false};
+  state.ledgerFilters={search:'',category1:'',category2:'',month:'',loan:false,overdue:false,inactive:false};
   state.ledgerPage=0;
   location.hash='ledger';
   navigate('ledger');
@@ -937,7 +945,7 @@ async function handleAction(event) {
 let searchTimer;
 function updateFilter(event) {
   const id=event.target.id;
-  const ledger=id.match(/^ledger-(search|category1|category2|month|loan|inactive)$/);
+  const ledger=id.match(/^ledger-(search|category1|category2|month|loan|overdue|inactive)$/);
   if(ledger){const key=ledger[1];state.ledgerFilters[key]=event.target.type==='checkbox'?event.target.checked:event.target.value;if(key==='category1')state.ledgerFilters.category2='';state.ledgerSelectedPlanIds.clear();state.ledgerPage=0;const restore=()=>{const selection=event.target.selectionStart,active=document.activeElement===event.target;renderLedger();if(active){const replacement=document.getElementById(id);replacement.focus();if(replacement.type==='search')replacement.setSelectionRange(selection,selection);}};clearTimeout(searchTimer);if(key==='search')searchTimer=setTimeout(restore,220);else restore();return true;}
   const matches=id.match(/^(expense|plan)-(search|category|month|deleted|archived|status)$/);
   if (!matches) return false;

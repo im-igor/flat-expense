@@ -280,6 +280,16 @@ def test_ledger_has_dependent_category_filters(browser):
     assert "if(key==='category1')state.ledgerFilters.category2=''" in asset
 
 
+def test_ledger_can_filter_past_unpaid_plans_and_show_their_total(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert 'id="ledger-overdue"' in asset
+    assert "function isPastUnpaidPlan(plan)" in asset
+    assert "function pastUnpaidPlanSummary()" in asset
+    assert "Неоплаченные из прошлого" in asset
+    assert "loan|overdue|inactive" in asset
+
+
 def test_ledger_shows_paid_values_missing_budgets_and_filtered_summary(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text
