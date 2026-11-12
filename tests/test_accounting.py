@@ -103,6 +103,21 @@ def test_plan_paid_amount_can_be_corrected_or_cleared(client, headers, category)
     assert cleared.json()["payment_status"] == "planned"
 
 
+def test_plan_can_be_finalized_without_another_payment(client, headers, category):
+    plan = make_plan(client, headers, category, expected="250000")
+    result = post(
+        client,
+        headers,
+        f"/v1/plans/{plan['id']}/finalize",
+        "finalize-plan",
+        {"version": plan["version"]},
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["payment_status"] == "finalized"
+    assert result.json()["paid_amount"] == "0.00"
+    assert result.json()["remaining_amount"] == "0.00"
+
+
 def test_reviewed_bot_expense_can_be_consumed_into_plan(client, headers, category, sessions):
     plan = make_plan(client, headers, category, expected="250000", note="Договорённость")
     data = ExpenseIn(

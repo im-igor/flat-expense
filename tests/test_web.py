@@ -239,6 +239,13 @@ def test_ledger_can_edit_total_paid_amount_of_a_plan(browser):
     assert "Ноль отменит все внесённые оплаты" in asset
 
 
+def test_ledger_has_quick_plan_finalization(browser):
+    browser.get("/")
+    asset = browser.get("/assets/app.js").text
+    assert 'data-action="finalize-plan"' in asset
+    assert "/finalize" in asset
+
+
 def test_overview_has_loan_scope_and_hover_breakdown(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text
