@@ -90,7 +90,7 @@ OTHER_PURCHASES = [
 
 def _find_plan(db, owner: int, *titles: str | None) -> Plan | None:
     names = [title for title in titles if title]
-    items = list(db.scalars(select(Plan).where(Plan.owner_id == owner, Plan.title.in_(names))))
+    items = list(db.scalars(select(Plan).where(Plan.title.in_(names))))
     if len(items) > 1:
         raise s.DomainError(f"Найдено несколько планов: {', '.join(names)}.")
     return items[0] if items else None
@@ -112,7 +112,7 @@ def apply_future_plan(db, owner: int) -> dict:
     roots = {
         item.name: item
         for item in db.scalars(
-            select(Category).where(Category.owner_id == owner, Category.parent_id.is_(None))
+            select(Category).where(Category.parent_id.is_(None))
         )
     }
     repair = roots.get("Ремонт")
@@ -208,7 +208,7 @@ def apply_future_plan(db, owner: int) -> dict:
 
     purchase_titles = [title for _, title, _ in TECH_PURCHASES] + OTHER_PURCHASES
     found_purchases = list(
-        db.scalars(select(Plan).where(Plan.owner_id == owner, Plan.title.in_(purchase_titles)))
+        db.scalars(select(Plan).where(Plan.title.in_(purchase_titles)))
     )
     purchase_by_title = {}
     for item in found_purchases:

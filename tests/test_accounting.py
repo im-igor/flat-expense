@@ -459,7 +459,7 @@ def test_invalid_money_rejected(client, headers, category, amount):
     assert response.status_code == 422
 
 
-def test_authorization_and_tenant_isolation(client, headers, category):
+def test_authorization_and_single_account_access(client, headers, category):
     p = make_plan(client, headers, category)
     e = make_expense(client, headers, category)
     assert client.get("/v1/expenses").status_code == 401
@@ -468,9 +468,9 @@ def test_authorization_and_tenant_isolation(client, headers, category):
         == 403
     )
     other = {**headers, "X-Telegram-User-Id": "222"}
-    assert client.get("/v1/expenses", headers=other).json() == []
-    assert client.get(f"/v1/expenses/{e['id']}", headers=other).status_code == 404
-    assert client.get(f"/v1/plans/{p['id']}", headers=other).status_code == 404
+    assert [item["id"] for item in client.get("/v1/expenses", headers=other).json()] == [e["id"]]
+    assert client.get(f"/v1/expenses/{e['id']}", headers=other).status_code == 200
+    assert client.get(f"/v1/plans/{p['id']}", headers=other).status_code == 200
     response = post(
         client,
         other,
@@ -483,7 +483,7 @@ def test_authorization_and_tenant_isolation(client, headers, category):
             "description": "x",
         },
     )
-    assert response.status_code == 404
+    assert response.status_code == 200
 
 
 def test_only_two_category_levels(client, headers, category):
@@ -550,7 +550,7 @@ def test_category_rename_replace_and_delete_updates_existing_records(
     assert deleted.status_code == 200 and deleted.json()["deleted"] is True
 
 
-def test_category_delete_conflicts_and_tenant_isolation(client, headers, category):
+def test_category_delete_conflicts_and_shared_account_access(client, headers, category):
     assert (
         client.delete(
             f"/v1/categories/{category['parent_id']}",
@@ -574,7 +574,7 @@ def test_category_delete_conflicts_and_tenant_isolation(client, headers, categor
             headers=other,
             json={"target_id": other_target["id"]},
         ).status_code
-        == 404
+        == 200
     )
 
 

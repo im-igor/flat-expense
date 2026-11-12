@@ -34,18 +34,16 @@ class Base(DeclarativeBase):
 class Category(Base):
     __tablename__ = "categories"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     name: Mapped[str] = mapped_column(String(120))
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("categories.id"))
     # Empty string for roots allows a portable UNIQUE constraint (NULL != NULL).
     parent_key: Mapped[str] = mapped_column(String(36), default="")
-    __table_args__ = (UniqueConstraint("owner_id", "parent_key", "name"),)
+    __table_args__ = (UniqueConstraint("parent_key", "name"),)
 
 
 class Plan(Base):
     __tablename__ = "plans"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     title: Mapped[str] = mapped_column(String(500))
     category_id: Mapped[str] = mapped_column(ForeignKey("categories.id"))
     expected_minor: Mapped[int | None] = mapped_column(BigInteger)
@@ -67,7 +65,6 @@ class Plan(Base):
 class Expense(Base):
     __tablename__ = "expenses"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     paid_on: Mapped[date] = mapped_column(Date)
     amount_minor: Mapped[int] = mapped_column(BigInteger)
     planned_amount_minor: Mapped[int] = mapped_column(BigInteger)
@@ -81,7 +78,7 @@ class Expense(Base):
     __table_args__ = (
         CheckConstraint("amount_minor > 0"),
         CheckConstraint("planned_amount_minor > 0", name="ck_expenses_planned_amount_positive"),
-        Index("expense_owner_date", "owner_id", "paid_on"),
+        Index("expense_paid_date", "paid_on"),
     )
 
 
@@ -94,7 +91,6 @@ class Document(Base):
 
     __tablename__ = "documents"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     expense_id: Mapped[str | None] = mapped_column(ForeignKey("expenses.id"), index=True)
     plan_id: Mapped[str | None] = mapped_column(ForeignKey("plans.id"), index=True)
     filename: Mapped[str] = mapped_column(String(255))
@@ -115,7 +111,6 @@ class Document(Base):
 class Audit(Base):
     __tablename__ = "audit"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     entity: Mapped[str] = mapped_column(String(30))
     entity_id: Mapped[str] = mapped_column(String(36))
     action: Mapped[str] = mapped_column(String(40))
@@ -127,16 +122,15 @@ class Audit(Base):
 class RequestLog(Base):
     __tablename__ = "requests"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger)
     key: Mapped[str] = mapped_column(String(200))
     fingerprint: Mapped[str] = mapped_column(String(64))
     response: Mapped[dict] = mapped_column(JSON, default=dict)
-    __table_args__ = (UniqueConstraint("owner_id", "key"),)
+    __table_args__ = (UniqueConstraint("key"),)
 
 
 class Draft(Base):
     __tablename__ = "drafts"
-    owner_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
     data: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
@@ -149,11 +143,10 @@ class BotCursor(Base):
 class ImportBatch(Base):
     __tablename__ = "import_batches"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger)
     source_sha256: Mapped[str] = mapped_column(String(64))
     summary: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint("owner_id", "source_sha256"),)
+    __table_args__ = (UniqueConstraint("source_sha256"),)
 
 
 class LoanPeriod(Base):
@@ -161,7 +154,6 @@ class LoanPeriod(Base):
 
     __tablename__ = "loan_periods"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     usage_month: Mapped[date] = mapped_column(Date)
     period_index: Mapped[int] = mapped_column(Integer)
     payment_date: Mapped[date] = mapped_column(Date)
@@ -175,7 +167,7 @@ class LoanPeriod(Base):
     end_balance_minor: Mapped[int] = mapped_column(BigInteger)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     __table_args__ = (
-        UniqueConstraint("owner_id", "period_index"),
+        UniqueConstraint("period_index"),
         CheckConstraint("period_index >= 0"),
         CheckConstraint("start_balance_minor >= 0"),
         CheckConstraint("interest_minor >= 0"),
@@ -183,15 +175,14 @@ class LoanPeriod(Base):
         CheckConstraint("payment_minor >= 0"),
         CheckConstraint("end_balance_minor >= 0"),
         CheckConstraint("key_rate IS NULL OR (key_rate >= 0 AND key_rate <= 100)"),
-        Index("loan_owner_payment_date", "owner_id", "payment_date"),
+        Index("loan_payment_date", "payment_date"),
     )
 
 
 class LoanImportBatch(Base):
     __tablename__ = "loan_import_batches"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    owner_id: Mapped[int] = mapped_column(BigInteger)
     source_sha256: Mapped[str] = mapped_column(String(64))
     summary: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint("owner_id", "source_sha256"),)
+    __table_args__ = (UniqueConstraint("source_sha256"),)

@@ -95,7 +95,6 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
 
         stage9 = db.scalar(
             select(Plan).where(
-                Plan.owner_id == owner,
                 Plan.title == "Этап 9: дополнительная шумоизоляция стен",
             )
         )
@@ -109,7 +108,6 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         material_rows = list(
             db.scalars(
                 select(Plan).where(
-                    Plan.owner_id == owner,
                     Plan.title.in_(material_titles),
                 )
             )
@@ -127,7 +125,6 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         assert materials.name == "Черновые материалы"
         technology = db.scalar(
             select(Category).where(
-                Category.owner_id == owner,
                 Category.parent_id.is_(None),
                 Category.name == "Техника",
             )
@@ -137,7 +134,7 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
             for item in db.scalars(select(Category).where(Category.parent_id == technology.id))
         }
         for room, title, amount in TECH_PURCHASES:
-            item = db.scalar(select(Plan).where(Plan.owner_id == owner, Plan.title == title))
+            item = db.scalar(select(Plan).where(Plan.title == title))
             assert item.category_id == rooms[room]
             assert item.expected_minor == amount * 100
             assert item.note == ("Из Excel" if title == "Вытяжка" else "")
@@ -145,7 +142,6 @@ def test_future_plan_reconciles_remaining_neat_stages_and_purchases(sessions):
         purchase_months = Counter(
             db.scalars(
                 select(Plan.due_month).where(
-                    Plan.owner_id == owner,
                     Plan.title.in_(purchase_titles),
                 )
             )

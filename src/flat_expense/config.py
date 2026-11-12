@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     expense_ai_min_similarity: float = Field(default=0.32, ge=0, le=1)
     expense_ai_min_margin: float = Field(default=0.025, ge=0, le=1)
     web_enabled: bool = False
-    web_owner_id: int | None = Field(default=None, gt=0)
     web_public: bool = False
     web_password_hash: SecretStr | None = None
     web_allowed_hosts: str = "localhost,127.0.0.1,::1"
@@ -32,23 +31,13 @@ class Settings(BaseSettings):
 
         return validate_local_url(value)
 
-    @field_validator("web_owner_id", mode="before")
-    @classmethod
-    def optional_web_owner(cls, value):
-        return None if value == "" else value
-
     @field_validator("web_password_hash", mode="before")
     @classmethod
     def optional_web_password_hash(cls, value):
         return None if value == "" else value
 
     @model_validator(mode="after")
-    def validate_web_owner(self):
-        if self.web_enabled:
-            if self.web_owner_id is None and len(self.allowed_ids) == 1:
-                self.web_owner_id = next(iter(self.allowed_ids))
-            if self.web_owner_id is None:
-                raise ValueError("Для веб-интерфейса задайте WEB_OWNER_ID.")
+    def validate_web_settings(self):
         if self.web_public and self.web_password_hash is None:
             raise ValueError("Для публичного веб-интерфейса задайте WEB_PASSWORD_HASH.")
         return self

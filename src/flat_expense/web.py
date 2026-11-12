@@ -28,6 +28,7 @@ HEADERS = {
 }
 LOGIN_WINDOW = 5 * 60
 LOGIN_LIMIT = 6
+APP_SCOPE = 1
 
 
 class LoginIn(BaseModel):
@@ -75,7 +76,7 @@ def signature(payload, config):
 
 
 def session_cookie(config):
-    payload = f"{config.web_owner_id}:{int(time.time()) + LIFETIME}:{secrets.token_hex(16)}"
+    payload = f"{APP_SCOPE}:{int(time.time()) + LIFETIME}:{secrets.token_hex(16)}"
     return payload + ":" + signature(payload, config)
 
 
@@ -89,10 +90,10 @@ def session_owner(request, config):
         if (
             not hmac.compare_digest(mac, signature(payload, config))
             or int(expiry) <= time.time()
-            or int(owner) != config.web_owner_id
+            or int(owner) != APP_SCOPE
         ):
             raise ValueError
-        return int(owner)
+        return APP_SCOPE
     except (ValueError, TypeError):
         return None
 

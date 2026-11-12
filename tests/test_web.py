@@ -15,9 +15,7 @@ WRITE = {"Origin": ORIGIN, "X-Flat-Expense": "web"}
 
 @pytest.fixture
 def web_config():
-    return Settings(
-        api_token=TOKEN, allowed_telegram_user_ids="111,222", web_enabled=True, web_owner_id=111
-    )
+    return Settings(api_token=TOKEN, allowed_telegram_user_ids="111,222", web_enabled=True)
 
 
 @pytest.fixture
@@ -26,20 +24,11 @@ def browser(sessions, web_config):
         yield client
 
 
-def test_web_requires_opt_in_and_unambiguous_owner(sessions):
-    with pytest.raises(ValidationError):
-        Settings(api_token=TOKEN, allowed_telegram_user_ids="111,222", web_enabled=True)
-    config_with_separate_owner = Settings(
-        api_token=TOKEN, allowed_telegram_user_ids="111", web_enabled=True, web_owner_id=222
-    )
-    assert config_with_separate_owner.web_owner_id == 222
-    with TestClient(create_app(config_with_separate_owner, sessions), base_url=ORIGIN) as client:
+def test_web_requires_opt_in_and_uses_single_account(sessions):
+    config = Settings(api_token=TOKEN, allowed_telegram_user_ids="111,222", web_enabled=True)
+    with TestClient(create_app(config, sessions), base_url=ORIGIN) as client:
         assert client.get("/").status_code == 200
         assert client.get("/v1/expenses").status_code == 200
-    config = Settings(
-        api_token=TOKEN, allowed_telegram_user_ids="111", web_enabled=True, web_owner_id=""
-    )
-    assert config.web_owner_id == 111
     off = Settings(api_token=TOKEN, allowed_telegram_user_ids="111")
     with TestClient(create_app(off, sessions), base_url=ORIGIN) as client:
         assert client.get("/").status_code == 401
@@ -126,7 +115,7 @@ def test_browser_auth_blocks_missing_tampered_and_expired_cookies(browser, web_c
     browser.cookies.set(COOKIE, original + "x")
     assert browser.get("/v1/expenses").status_code == 401
     browser.cookies.clear()
-    payload = f"111:{int(time.time()) - 1}:nonce"
+    payload = f"1:{int(time.time()) - 1}:nonce"
     browser.cookies.set(COOKIE, payload + ":" + signature(payload, web_config))
     assert browser.get("/v1/expenses").status_code == 401
 
@@ -153,7 +142,7 @@ def test_browser_cannot_choose_another_owner_or_use_telegram_internal(browser):
     other = browser.get(
         "/v1/categories", headers={"Authorization": "Bearer " + TOKEN, "X-Telegram-User-Id": "222"}
     ).json()
-    assert other == []
+    assert [item["id"] for item in other] == [own["id"]]
     assert (
         browser.post("/internal/telegram/update", headers=WRITE, json={"update_id": 1}).status_code
         == 401

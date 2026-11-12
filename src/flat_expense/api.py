@@ -30,7 +30,7 @@ from flat_expense.schemas import (
     PlanPaymentIn,
     VersionIn,
 )
-from flat_expense.web import browser_actor, install_web
+from flat_expense.web import APP_SCOPE, browser_actor, install_web
 
 
 def create_app(config: Settings | None = None, sessions=None):
@@ -59,7 +59,7 @@ def create_app(config: Settings | None = None, sessions=None):
         authorize(credentials)
         if x_telegram_user_id not in config.allowed_ids:
             raise HTTPException(403, "Доступ запрещён.")
-        return x_telegram_user_id
+        return APP_SCOPE
 
     def session():
         with sessions() as db, db.begin():
@@ -591,7 +591,7 @@ def create_app(config: Settings | None = None, sessions=None):
             raise HTTPException(403, "Доступ запрещён.")
         content = await document_body(request)
         return store_document(
-            db, x_telegram_user_id, idempotency_key, filename, note, source, None, None,
+            db, APP_SCOPE, idempotency_key, filename, note, source, None, None,
             document_type(request), content,
         )
 

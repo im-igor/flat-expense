@@ -14,6 +14,8 @@ from flat_expense.expense_text import extract_leading_payment
 from flat_expense.models import Category, Draft, Expense, Plan
 from flat_expense.schemas import ExpenseIn, PlanIn
 
+APP_SCOPE = 1
+
 
 def button(text, callback):
     return {"text": text[:60], "callback_data": callback}
@@ -60,9 +62,9 @@ class Conversation:
     def __init__(self, db, owner, ai=None):
         self.db, self.owner = db, owner
         self.ai = ai
-        self.draft = db.scalar(select(Draft).where(Draft.owner_id == owner).with_for_update())
+        self.draft = db.scalar(select(Draft).where(Draft.id == 1).with_for_update())
         if self.draft is None:
-            self.draft = Draft(owner_id=owner, data={})
+            self.draft = Draft(id=1, data={})
             db.add(self.draft)
             db.flush()
         self.data = dict(self.draft.data)
@@ -77,7 +79,7 @@ class Conversation:
 
     def ensure_categories(self):
         if (
-            self.db.scalar(select(Category.id).where(Category.owner_id == self.owner).limit(1))
+            self.db.scalar(select(Category.id).limit(1))
             is None
         ):
             s.seed_categories(self.db, self.owner)
@@ -171,7 +173,6 @@ class Conversation:
             plan = self.db.get(Plan, identifier)
             if (
                 plan
-                and plan.owner_id == self.owner
                 and not plan.archived
                 and plan.payment_status not in ("paid", "finalized")
             ):
@@ -247,7 +248,7 @@ class Conversation:
                 suggested = []
                 for identifier in self.data["category_suggestions"]:
                     category = self.db.get(Category, identifier)
-                    if category and category.owner_id == self.owner:
+                    if category:
                         suggested.append(category)
                 if suggested:
                     rows.extend(
@@ -265,7 +266,7 @@ class Conversation:
             items = list(
                 self.db.scalars(
                     select(Category)
-                    .where(Category.owner_id == self.owner, Category.parent_id == parent)
+                    .where(Category.parent_id == parent)
                     .order_by(Category.name)
                 )
             )
@@ -701,15 +702,19 @@ def process_update(db, allowed_ids, update, ai=None):
     callback = update.get("callback_query")
     msg = callback.get("message", {}) if callback else update.get("message", {})
     actor = callback.get("from", {}) if callback else msg.get("from", {})
-    owner = actor.get("id")
+    telegram_user_id = actor.get("id")
     chat = msg.get("chat", {})
-    if owner not in allowed_ids or chat.get("type") != "private" or chat.get("id") != owner:
+    if (
+        telegram_user_id not in allowed_ids
+        or chat.get("type") != "private"
+        or chat.get("id") != telegram_user_id
+    ):
         return {"messages": []}
     if not isinstance(update.get("update_id"), int):
         raise s.DomainError("Отсутствует update_id.")
 
     def run():
-        conversation = Conversation(db, owner, ai=ai)
+        conversation = Conversation(db, APP_SCOPE, ai=ai)
         try:
             if callback:
                 reply = conversation.callback(callback.get("data", ""))
@@ -718,7 +723,7 @@ def process_update(db, allowed_ids, update, ai=None):
                     conversation.command(text) if text.startswith("/") else conversation.input(text)
                 )
             elif msg.get("document") or msg.get("photo"):
-                return {"chat_id": owner, "messages": [], "callback_query_id": None}
+                return {"chat_id": telegram_user_id, "messages": [], "callback_query_id": None}
             else:
                 reply = message(
                     "Поддерживаются текст, PDF, изображения, DOCX и XLSX."
@@ -738,9 +743,9 @@ def process_update(db, allowed_ids, update, ai=None):
         if reply.get("reply_markup"):
             messages[-1]["reply_markup"] = reply["reply_markup"]
         return {
-            "chat_id": owner,
+            "chat_id": telegram_user_id,
             "messages": messages,
             "callback_query_id": callback.get("id") if callback else None,
         }
 
-    return s.once(db, owner, f"tg:{update['update_id']}", update, run)
+    return s.once(db, APP_SCOPE, f"tg:{update['update_id']}", update, run)

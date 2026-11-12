@@ -69,8 +69,7 @@ def test_refresh_uses_historical_and_forecast_rates(sessions, monkeypatch):
     with sessions() as db, db.begin():
         db.add_all(
             [
-                LoanPeriod(
-                    owner_id=111,
+                    LoanPeriod(
                     usage_month=date(2026, 4, 1),
                     period_index=0,
                     payment_date=date(2026, 5, 10),
@@ -80,8 +79,7 @@ def test_refresh_uses_historical_and_forecast_rates(sessions, monkeypatch):
                     payment_minor=1_000,
                     end_balance_minor=100_000,
                 ),
-                LoanPeriod(
-                    owner_id=111,
+                    LoanPeriod(
                     usage_month=date(2026, 6, 1),
                     period_index=1,
                     payment_date=date(2026, 7, 10),
@@ -139,8 +137,7 @@ def test_loan_payments_are_in_monthly_expense_analysis(sessions, monkeypatch):
         )
         for index, payment_date in enumerate((date(2026, 5, 10), date(2026, 7, 10))):
             db.add(
-                LoanPeriod(
-                    owner_id=111,
+                    LoanPeriod(
                     usage_month=payment_date.replace(day=1),
                     period_index=index,
                     payment_date=payment_date,

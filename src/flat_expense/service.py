@@ -96,7 +96,7 @@ def month_range(start: date, end: date) -> list[date]:
 
 
 def owned(db: Session, model, owner: int, identifier: str, lock: bool = False):
-    query = select(model).where(model.id == identifier, model.owner_id == owner)
+    query = select(model).where(model.id == identifier)
     item = db.scalar(query.with_for_update() if lock else query)
     if item is None:
         raise DomainError("Запись не найдена.", 404)
@@ -121,17 +121,13 @@ def ensure_category(db: Session, owner: int, name: str, parent_id: str | None = 
         parent = owned(db, Category, owner, parent_id)
         if parent.parent_id:
             raise DomainError("Поддерживаются два уровня категорий.")
-    query = select(Category).where(
-        Category.owner_id == owner, Category.parent_key == (parent_id or ""), Category.name == name
-    )
+    query = select(Category).where(Category.parent_key == (parent_id or ""), Category.name == name)
     category = db.scalar(query)
     if category:
         return category
     try:
         with db.begin_nested():
-            category = Category(
-                owner_id=owner, name=name, parent_id=parent_id, parent_key=parent_id or ""
-            )
+            category = Category(name=name, parent_id=parent_id, parent_key=parent_id or "")
             db.add(category)
             db.flush()
     except IntegrityError:
@@ -163,27 +159,23 @@ def seed_categories(db: Session, owner: int):
 
 
 def categories(db: Session, owner: int) -> list[dict]:
-    items = list(
-        db.scalars(select(Category).where(Category.owner_id == owner).order_by(Category.name))
-    )
+    items = list(db.scalars(select(Category).order_by(Category.name)))
     expense_counts = dict(
         db.execute(
             select(Expense.category_id, func.count())
-            .where(Expense.owner_id == owner)
             .group_by(Expense.category_id)
         ).all()
     )
     plan_counts = dict(
         db.execute(
             select(Plan.category_id, func.count())
-            .where(Plan.owner_id == owner)
             .group_by(Plan.category_id)
         ).all()
     )
     child_counts = dict(
         db.execute(
             select(Category.parent_id, func.count())
-            .where(Category.owner_id == owner, Category.parent_id.is_not(None))
+            .where(Category.parent_id.is_not(None))
             .group_by(Category.parent_id)
         ).all()
     )
@@ -208,7 +200,6 @@ def rename_category(db: Session, owner: int, identifier: str, name: str) -> dict
         return before
     duplicate = db.scalar(
         select(Category.id).where(
-            Category.owner_id == owner,
             Category.parent_key == item.parent_key,
             Category.name == name,
             Category.id != item.id,
@@ -232,12 +223,12 @@ def delete_category(db: Session, owner: int, identifier: str) -> dict:
     expenses = db.scalar(
         select(func.count())
         .select_from(Expense)
-        .where(Expense.owner_id == owner, Expense.category_id == item.id)
+        .where(Expense.category_id == item.id)
     )
     plans = db.scalar(
         select(func.count())
         .select_from(Plan)
-        .where(Plan.owner_id == owner, Plan.category_id == item.id)
+        .where(Plan.category_id == item.id)
     )
     if children:
         raise DomainError("Сначала удалите или объедините подкатегории этой группы.", 409)
@@ -263,12 +254,12 @@ def replace_category(db: Session, owner: int, identifier: str, target_id: str) -
     before = category_view(db, source)
     expense_count = db.execute(
         update(Expense)
-        .where(Expense.owner_id == owner, Expense.category_id == source.id)
+        .where(Expense.category_id == source.id)
         .values(category_id=target.id, version=Expense.version + 1)
     ).rowcount
     plan_count = db.execute(
         update(Plan)
-        .where(Plan.owner_id == owner, Plan.category_id == source.id)
+        .where(Plan.category_id == source.id)
         .values(category_id=target.id, version=Plan.version + 1)
     ).rowcount
     result = {
@@ -283,7 +274,7 @@ def replace_category(db: Session, owner: int, identifier: str, target_id: str) -
 
 
 def expense_view(db: Session, item: Expense) -> dict:
-    category = owned(db, Category, item.owner_id, item.category_id)
+    category = owned(db, Category, 0, item.category_id)
     return {
         "id": item.id,
         "paid_on": item.paid_on.isoformat(),
@@ -356,7 +347,6 @@ def add_document(
         document_target(db, owner, target_type, target_id)
         fields[target_type + "_id"] = target_id
     item = Document(
-        owner_id=owner,
         filename=filename,
         content_type=content_type,
         size_bytes=len(content),
@@ -374,7 +364,7 @@ def add_document(
 
 
 def list_documents(db: Session, owner: int, target_type: str | None = None, target_id: str | None = None):
-    query = select(Document).where(Document.owner_id == owner)
+    query = select(Document)
     if target_type is not None:
         document_target(db, owner, target_type, target_id)
         query = query.where(getattr(Document, target_type + "_id") == target_id)
@@ -407,7 +397,6 @@ def delete_document(db: Session, owner: int, identifier: str) -> dict:
 def audit(db: Session, owner: int, entity: str, identifier: str, action: str, before, after):
     db.add(
         Audit(
-            owner_id=owner,
             entity=entity,
             entity_id=identifier,
             action=action,
@@ -418,7 +407,7 @@ def audit(db: Session, owner: int, entity: str, identifier: str, action: str, be
 
 
 def plan_view(db: Session, item: Plan) -> dict:
-    category = owned(db, Category, item.owner_id, item.category_id)
+    category = owned(db, Category, 0, item.category_id)
     planned_minor = plan_amount_minor(item)
     return {
         "id": item.id,
@@ -457,7 +446,6 @@ def validate_expense(db: Session, owner: int, data: ExpenseIn):
 def add_expense(db: Session, owner: int, data: ExpenseIn, needs_review: bool = False) -> dict:
     validate_expense(db, owner, data)
     item = Expense(
-        owner_id=owner,
         paid_on=data.paid_on,
         amount_minor=minor(data.amount),
         planned_amount_minor=minor(data.planned_amount or data.amount),
@@ -524,7 +512,6 @@ def resolve_expense_review(db: Session, owner: int, identifier: str, version: in
 def add_plan(db: Session, owner: int, data: PlanIn) -> dict:
     owned(db, Category, owner, data.category_id)
     item = Plan(
-        owner_id=owner,
         title=data.title,
         category_id=data.category_id,
         expected_minor=minor(data.expected),
@@ -680,7 +667,7 @@ def apply_expense_to_plan(
     )
     plan.version += 1
     documents = list(
-        db.scalars(select(Document).where(Document.owner_id == owner, Document.expense_id == expense.id))
+        db.scalars(select(Document).where(Document.expense_id == expense.id))
     )
     for document in documents:
         document.expense_id = None
@@ -726,7 +713,7 @@ def delete_plan(db: Session, owner: int, identifier: str, version: int) -> dict:
     if item.version != version:
         raise DomainError("План уже изменён. Откройте его заново.", 409)
     if db.scalar(
-        select(func.count()).select_from(Document).where(Document.owner_id == owner, Document.plan_id == item.id)
+        select(func.count()).select_from(Document).where(Document.plan_id == item.id)
     ):
         raise DomainError("Сначала удалите прикреплённые документы.", 409)
     before = plan_view(db, item)
@@ -740,7 +727,7 @@ def delete_plan(db: Session, owner: int, identifier: str, version: int) -> dict:
 def list_expenses(db: Session, owner: int, offset=0, limit=10, deleted=False):
     query = (
         select(Expense)
-        .where(Expense.owner_id == owner, Expense.deleted == deleted)
+        .where(Expense.deleted == deleted)
         .order_by(Expense.paid_on.desc(), Expense.created_at.desc(), Expense.id)
         .offset(offset)
         .limit(limit)
@@ -751,7 +738,7 @@ def list_expenses(db: Session, owner: int, offset=0, limit=10, deleted=False):
 def list_plans(db: Session, owner: int, offset=0, limit=10, archived=False):
     query = (
         select(Plan)
-        .where(Plan.owner_id == owner, Plan.archived == archived)
+        .where(Plan.archived == archived)
         .order_by(Plan.due_month.asc().nulls_last(), Plan.created_at, Plan.id)
         .offset(offset)
         .limit(limit)
@@ -767,15 +754,13 @@ def summary(db: Session, owner: int, start: date, end: date):
     loan_planned_by_month = {m: 0 for m in months}
     missing = {m: 0 for m in months}
     for e in db.scalars(
-        select(Expense).where(
-            Expense.owner_id == owner, Expense.deleted.is_(False), Expense.paid_on >= months[0]
-        )
+        select(Expense).where(Expense.deleted.is_(False), Expense.paid_on >= months[0])
     ):
         m = e.paid_on.replace(day=1)
         if m in actual_without_loan:
             actual_without_loan[m] += e.amount_minor
     undated, unknown_undated, undated_count = 0, 0, 0
-    for p in db.scalars(select(Plan).where(Plan.owner_id == owner, Plan.archived.is_(False))):
+    for p in db.scalars(select(Plan).where(Plan.archived.is_(False))):
         if p.paid_on and p.paid_on >= months[0]:
             payment_month = p.paid_on.replace(day=1)
             if payment_month in actual_without_loan:
@@ -794,7 +779,7 @@ def summary(db: Session, owner: int, start: date, end: date):
                 planned_without_loan[p.due_month] += rest
     loan_actual, loan_planned = 0, 0
     current_day = today()
-    for loan in db.scalars(select(LoanPeriod).where(LoanPeriod.owner_id == owner)):
+    for loan in db.scalars(select(LoanPeriod)):
         month = loan.payment_date.replace(day=1)
         if month not in actual_without_loan:
             continue
@@ -885,7 +870,7 @@ def loan_period_view(item: LoanPeriod) -> dict:
 
 
 def list_loan_periods(db: Session, owner: int) -> list[dict]:
-    query = select(LoanPeriod).where(LoanPeriod.owner_id == owner).order_by(LoanPeriod.period_index)
+    query = select(LoanPeriod).order_by(LoanPeriod.period_index)
     return [loan_period_view(item) for item in db.scalars(query)]
 
 
@@ -911,7 +896,6 @@ def refresh_loan_rates(db: Session, owner: int, fetcher=None) -> dict:
     periods = list(
         db.scalars(
             select(LoanPeriod)
-            .where(LoanPeriod.owner_id == owner)
             .order_by(LoanPeriod.period_index)
             .with_for_update()
         )
@@ -954,7 +938,7 @@ def refresh_loan_rates(db: Session, owner: int, fetcher=None) -> dict:
         "latest_rate_date": latest_day.isoformat(),
         "source": cbr.SOURCE_PAGE,
     }
-    audit(db, owner, "loan", str(owner), "refresh_rates", None, result)
+    audit(db, owner, "loan", "schedule", "refresh_rates", None, result)
     return result
 
 
@@ -964,12 +948,12 @@ def once(db: Session, owner: int, key: str, payload: dict, action):
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()
     ).hexdigest()
-    query = select(RequestLog).where(RequestLog.owner_id == owner, RequestLog.key == key)
+    query = select(RequestLog).where(RequestLog.key == key)
     previous = db.scalar(query)
     if previous is None:
         try:
             with db.begin_nested():
-                previous = RequestLog(owner_id=owner, key=key, fingerprint=digest, response={})
+                previous = RequestLog(key=key, fingerprint=digest, response={})
                 db.add(previous)
                 db.flush()
         except IntegrityError:

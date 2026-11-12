@@ -80,21 +80,15 @@ def plan_categories(code, group):
 
 def import_xlsx(db, owner: int, path: Path):
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    previous = db.scalar(
-        select(ImportBatch).where(
-            ImportBatch.owner_id == owner, ImportBatch.source_sha256 == digest
-        )
-    )
+    previous = db.scalar(select(ImportBatch).where(ImportBatch.source_sha256 == digest))
     if previous:
         return {**previous.summary, "already_imported": True}
     # This is an initial migration, not ongoing reconciliation of edited workbooks.
-    if db.scalar(select(ImportBatch.id).where(ImportBatch.owner_id == owner).limit(1)):
+    if db.scalar(select(ImportBatch.id).limit(1)):
         raise s.DomainError(
             "Начальный импорт уже выполнен из другого файла. Повторный импорт новой версии требует сверки, чтобы не задвоить расходы."
         )
-    if db.scalar(select(Expense.id).where(Expense.owner_id == owner).limit(1)) or db.scalar(
-        select(Plan.id).where(Plan.owner_id == owner).limit(1)
-    ):
+    if db.scalar(select(Expense.id).limit(1)) or db.scalar(select(Plan.id).limit(1)):
         raise s.DomainError(
             "Начальный импорт разрешён только в пустой учёт. Сначала проверьте текущие записи."
         )
@@ -198,7 +192,7 @@ def import_xlsx(db, owner: int, path: Path):
             "normalized_category_aliases": ALIASES,
             "already_imported": False,
         }
-        db.add(ImportBatch(owner_id=owner, source_sha256=digest, summary=summary))
+        db.add(ImportBatch(source_sha256=digest, summary=summary))
         db.flush()
         return summary
     finally:
@@ -210,10 +204,7 @@ def remove_historical_plan_cards(db, owner: int) -> dict:
 
     items = list(
         db.scalars(
-            select(Plan).where(
-                Plan.owner_id == owner,
-                Plan.title.in_(HISTORICAL_PLAN_TITLES),
-            )
+            select(Plan).where(Plan.title.in_(HISTORICAL_PLAN_TITLES))
         )
     )
     removed = []
@@ -254,14 +245,10 @@ LOAN_HEADERS = [
 
 def import_loan_xlsx(db, owner: int, path: Path):
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    previous = db.scalar(
-        select(LoanImportBatch).where(
-            LoanImportBatch.owner_id == owner, LoanImportBatch.source_sha256 == digest
-        )
-    )
+    previous = db.scalar(select(LoanImportBatch).where(LoanImportBatch.source_sha256 == digest))
     if previous:
         return {**previous.summary, "already_imported": True}
-    if db.scalar(select(LoanPeriod.id).where(LoanPeriod.owner_id == owner).limit(1)):
+    if db.scalar(select(LoanPeriod.id).limit(1)):
         raise s.DomainError(
             "График займа уже загружен. Новую версию нужно сверить отдельно, чтобы не задвоить периоды."
         )
@@ -293,7 +280,6 @@ def import_loan_xlsx(db, owner: int, path: Path):
             except (InvalidOperation, ValueError):
                 parsed_rate = None
             item = LoanPeriod(
-                owner_id=owner,
                 usage_month=source_date(usage_month).replace(day=1),
                 period_index=int(index),
                 payment_date=source_date(payment_date),
@@ -317,8 +303,8 @@ def import_loan_xlsx(db, owner: int, path: Path):
             "final_balance": s.money(periods[-1].end_balance_minor),
             "already_imported": False,
         }
-        db.add(LoanImportBatch(owner_id=owner, source_sha256=digest, summary=summary))
-        s.audit(db, owner, "loan", str(owner), "import", None, summary)
+        db.add(LoanImportBatch(source_sha256=digest, summary=summary))
+        s.audit(db, owner, "loan", "schedule", "import", None, summary)
         db.flush()
         return summary
     finally:
@@ -356,11 +342,9 @@ def verify_expenses_xlsx(db, owner: int, path: Path) -> dict:
                     str(note or ""),
                 )
             ] += 1
-        categories = {
-            item.id: item for item in db.scalars(select(Category).where(Category.owner_id == owner))
-        }
+        categories = {item.id: item for item in db.scalars(select(Category))}
         actual = Counter()
-        for item in db.scalars(select(Expense).where(Expense.owner_id == owner)):
+        for item in db.scalars(select(Expense)):
             category_item = categories[item.category_id]
             parent = categories.get(category_item.parent_id)
             path_name = f"{parent.name} → {category_item.name}" if parent else category_item.name

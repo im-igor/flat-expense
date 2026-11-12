@@ -12,7 +12,7 @@ def upload(client, headers, path, key, filename="receipt.pdf", body=PDF, content
     )
 
 
-def test_documents_are_private_and_can_be_downloaded_and_deleted(client, headers, category):
+def test_documents_are_shared_by_allowed_bot_accounts_and_can_be_deleted(client, headers, category):
     expense = make_expense(client, headers, category)
     created = upload(client, headers, f"/v1/expenses/{expense['id']}/documents", "document-1")
     assert created.status_code == 200, created.text
@@ -28,7 +28,7 @@ def test_documents_are_private_and_can_be_downloaded_and_deleted(client, headers
     assert "inline" in content.headers["content-disposition"]
 
     other = {**headers, "X-Telegram-User-Id": "222"}
-    assert client.get(f"/v1/documents/{document['id']}/content", headers=other).status_code == 404
+    assert client.get(f"/v1/documents/{document['id']}/content", headers=other).status_code == 200
     deleted = client.delete(
         f"/v1/documents/{document['id']}", headers={**headers, "Idempotency-Key": "document-delete"}
     )
