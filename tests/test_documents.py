@@ -53,6 +53,12 @@ def test_telegram_inbox_document_can_be_attached_to_a_plan(client, headers, cate
     assert created.status_code == 200, created.text
     document = created.json()
     assert client.get("/v1/documents/inbox", headers=headers).json()[0]["id"] == document["id"]
+    assert client.get("/v1/documents", headers=headers).json() == []
+    assert client.put(
+        f"/v1/documents/{document['id']}/move",
+        params={"target_type": "plan", "target_id": plan["id"]},
+        headers={**headers, "Idempotency-Key": "move-unattached-document"},
+    ).status_code == 409
 
     attached = client.put(
         f"/v1/documents/{document['id']}/attach",
@@ -64,6 +70,35 @@ def test_telegram_inbox_document_can_be_attached_to_a_plan(client, headers, cate
     assert client.get("/v1/documents/inbox", headers=headers).json() == []
     assert client.get(f"/v1/plans/{plan['id']}/documents", headers=headers).json()[0]["id"] == document["id"]
     assert client.get(f"/v1/plans/{plan['id']}", headers=headers).json()["document_count"] == 1
+
+
+def test_attached_document_catalog_and_move(client, headers, category):
+    plan = make_plan(client, headers, category)
+    expense = make_expense(client, headers, category)
+    document = upload(client, headers, f"/v1/plans/{plan['id']}/documents", "catalog-document").json()
+
+    catalog = client.get("/v1/documents", headers=headers)
+    assert catalog.status_code == 200
+    assert [(item["id"], item["plan_id"]) for item in catalog.json()] == [(document["id"], plan["id"])]
+    assert client.get("/v1/documents", params={"limit": 1, "offset": 1}, headers=headers).json() == []
+    invalid = client.put(
+        f"/v1/documents/{document['id']}/move",
+        params={"target_type": "expense", "target_id": "missing-expense"},
+        headers={**headers, "Idempotency-Key": "move-to-missing-expense"},
+    )
+    assert invalid.status_code == 404
+    assert client.get(f"/v1/plans/{plan['id']}/documents", headers=headers).json()[0]["id"] == document["id"]
+
+    moved = client.put(
+        f"/v1/documents/{document['id']}/move",
+        params={"target_type": "expense", "target_id": expense["id"]},
+        headers={**headers, "Idempotency-Key": "move-catalog-document"},
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["expense_id"] == expense["id"]
+    assert moved.json()["plan_id"] is None
+    assert client.get(f"/v1/plans/{plan['id']}/documents", headers=headers).json() == []
+    assert client.get(f"/v1/expenses/{expense['id']}/documents", headers=headers).json()[0]["id"] == document["id"]
 
 
 def test_document_validation_and_plan_delete_guard(client, headers, category):

@@ -20,6 +20,7 @@
     <nav aria-label="Разделы">
       <a href="#overview" data-view="overview" aria-label="Обзор" title="Обзор"><span class="nav-icon" aria-hidden="true">◫</span><span class="nav-label">Обзор</span></a>
       <a href="#ledger" data-view="ledger" aria-label="Расходы и планы" title="Расходы и планы"><span class="nav-icon" aria-hidden="true">↗</span><span class="nav-label">Расходы и планы</span></a>
+      <a href="#documents" data-view="documents" aria-label="Документы" title="Документы"><span class="nav-icon" aria-hidden="true">▧</span><span class="nav-label">Документы</span></a>
       <a href="#loan" data-view="loan" aria-label="Займ" title="Займ"><span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">Займ</span></a>
       <a href="#categories" data-view="categories" aria-label="Категории" title="Категории"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-label">Категории</span></a>
     </nav>
@@ -34,6 +35,7 @@
     <div id="loading" class="loading" role="status"><span class="spinner"></span>Загружаю ваш учёт…</div>
     <section id="view-overview" class="view hidden" aria-label="Обзор расходов"></section>
     <section id="view-ledger" class="view hidden" aria-label="Расходы и планы"></section>
+    <section id="view-documents" class="view hidden" aria-label="Прикреплённые документы"></section>
     <section id="view-loan" class="view hidden" aria-label="График займа"></section>
     <section id="view-categories" class="view hidden" aria-label="Категории"></section>
     <footer class="page-footer"><span>Квартира · расходы и планы</span><span class="footer-actions"><button class="text-button logout-button" data-action="logout">Выйти</button></span></footer>
@@ -41,6 +43,7 @@
   <dialog id="editor" aria-labelledby="editor-title"><div class="dialog-head"><div><p id="editor-eyebrow" class="eyebrow"></p><h2 id="editor-title"></h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><div id="editor-content"></div></dialog>
   <dialog id="document-inbox-dialog" aria-labelledby="document-inbox-title"><div class="dialog-head"><div><p class="eyebrow">ИЗ TELEGRAM</p><h2 id="document-inbox-title">Распределите документы</h2></div><button type="button" class="icon-button" data-action="close-document-inbox" aria-label="Закрыть">×</button></div><div id="document-inbox-content"></div></dialog>
   <dialog id="document-list-dialog" aria-labelledby="document-list-title"><div class="dialog-head"><div><p class="eyebrow">ПРИКРЕПЛЁННЫЕ ФАЙЛЫ</p><h2 id="document-list-title">Документы</h2></div><button type="button" class="icon-button" data-action="close-document-list" aria-label="Закрыть">×</button></div><div id="document-list-content"></div></dialog>
+  <dialog id="document-move-dialog" aria-labelledby="document-move-title"><div class="dialog-head"><div><p class="eyebrow">ПЕРЕНОС ДОКУМЕНТА</p><h2 id="document-move-title">Выберите статью</h2></div><button type="button" class="icon-button" data-action="close-document-move" aria-label="Закрыть">×</button></div><div id="document-move-content"></div></dialog>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-head"><h2 id="confirm-title">Подтверждение</h2></div><p id="confirm-text"></p><div class="form-actions"><button class="button secondary" id="confirm-cancel">Отмена</button><button class="button danger" id="confirm-ok">Подтвердить</button></div></dialog>
   <div id="toast" role="status" class="toast hidden"></div>
   <noscript><p>Для ввода расходов включите JavaScript в браузере.</p></noscript>

@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from flat_expense import cbr
 from flat_expense.models import (
@@ -380,13 +380,25 @@ def add_document(
 
 
 def list_documents(db: Session, owner: int, target_type: str | None = None, target_id: str | None = None):
-    query = select(Document)
+    query = select(Document).options(defer(Document.content))
     if target_type is not None:
         document_target(db, owner, target_type, target_id)
         query = query.where(getattr(Document, target_type + "_id") == target_id)
     else:
         query = query.where(Document.expense_id.is_(None), Document.plan_id.is_(None))
     return [document_view(item) for item in db.scalars(query.order_by(Document.created_at.desc(), Document.id))]
+
+
+def list_attached_documents(db: Session, owner: int, limit: int = 100, offset: int = 0):
+    query = (
+        select(Document)
+        .options(defer(Document.content))
+        .where((Document.expense_id.is_not(None)) | (Document.plan_id.is_not(None)))
+        .order_by(Document.created_at.desc(), Document.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [document_view(item) for item in db.scalars(query)]
 
 
 def attach_document(db: Session, owner: int, identifier: str, target_type: str, target_id: str) -> dict:
@@ -399,6 +411,21 @@ def attach_document(db: Session, owner: int, identifier: str, target_type: str, 
     db.flush()
     result = document_view(item)
     audit(db, owner, "document", item.id, "attach", before, result)
+    return result
+
+
+def move_document(db: Session, owner: int, identifier: str, target_type: str, target_id: str) -> dict:
+    item = owned(db, Document, owner, identifier, lock=True)
+    if not (item.expense_id or item.plan_id):
+        raise DomainError("Документ ещё не прикреплён.", 409)
+    document_target(db, owner, target_type, target_id)
+    before = document_view(item)
+    item.expense_id = target_id if target_type == "expense" else None
+    item.plan_id = target_id if target_type == "plan" else None
+    db.flush()
+    result = document_view(item)
+    if result != before:
+        audit(db, owner, "document", item.id, "move", before, result)
     return result
 
 

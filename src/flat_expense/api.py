@@ -354,6 +354,15 @@ def create_app(config: Settings | None = None, sessions=None):
     def document_inbox(owner=Depends(actor), db=Depends(session)):
         return s.list_documents(db, owner)
 
+    @app.get("/v1/documents")
+    def attached_documents(
+        limit: int = Query(100, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.list_attached_documents(db, owner, limit, offset)
+
     @app.put("/v1/documents/{identifier}/attach")
     def attach_document(
         identifier: str,
@@ -369,6 +378,23 @@ def create_app(config: Settings | None = None, sessions=None):
             idempotency_key,
             {"action": "document.attach", "id": identifier, "target_type": target_type, "target_id": target_id},
             lambda: s.attach_document(db, owner, identifier, target_type, target_id),
+        )
+
+    @app.put("/v1/documents/{identifier}/move")
+    def move_document(
+        identifier: str,
+        target_type: Literal["expense", "plan"],
+        target_id: str,
+        idempotency_key: Annotated[str, Header()],
+        owner=Depends(actor),
+        db=Depends(session),
+    ):
+        return s.once(
+            db,
+            owner,
+            idempotency_key,
+            {"action": "document.move", "id": identifier, "target_type": target_type, "target_id": target_id},
+            lambda: s.move_document(db, owner, identifier, target_type, target_id),
         )
 
     @app.get("/v1/documents/{identifier}/content")

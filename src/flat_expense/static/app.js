@@ -8,6 +8,12 @@ let pendingRequest = null;
 let toastTimer;
 let inboxDocuments = [];
 const documentInboxSelections = new Map();
+let documentTargetSearch = '';
+let attachedDocuments = [];
+let attachedDocumentsLoaded = false;
+let attachedDocumentsLoading = false;
+let attachedDocumentSearch = '';
+let documentMove = null;
 const PAGE_SIZE = 15;
 const LOAN_CATEGORY_ID = '__loan__';
 const LOAN_PAYMENT_CATEGORY_ID = '__loan-payment__';
@@ -191,8 +197,9 @@ function planStatus(plan) {
 }
 function navigate(view) {
   if (view === 'expenses' || view === 'plans') view = 'ledger';
-  const nextView=['overview','ledger','loan','categories'].includes(view) ? view : 'overview';
+  const nextView=['overview','ledger','documents','loan','categories'].includes(view) ? view : 'overview';
   if(nextView==='ledger'&&state.view!=='ledger')state.ledgerAutoPosition=true;
+  if(nextView==='documents'&&state.view!=='documents')attachedDocumentsLoaded=false;
   state.view = nextView;
   $('.page-header').classList.toggle('compact',state.view==='ledger');
   document.querySelectorAll('nav a').forEach(a => {
@@ -200,7 +207,7 @@ function navigate(view) {
     a.classList.toggle('active', active);
     if (active) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');
   });
-  const titles = {overview:['Обзор','Понимать, сколько уже потрачено и что ещё впереди.'], ledger:['Расходы и планы','Оплаты и будущие расходы в одной хронологии.'], loan:['Займ','График платежей, материальная выгода и налог по ставке Банка России.'], categories:['Категории','Два уровня, чтобы расходы всегда были на своём месте.']};
+  const titles = {overview:['Обзор','Понимать, сколько уже потрачено и что ещё впереди.'], ledger:['Расходы и планы','Оплаты и будущие расходы в одной хронологии.'], documents:['Документы','Все прикреплённые файлы и связанные с ними статьи.'], loan:['Займ','График платежей, материальная выгода и налог по ставке Банка России.'], categories:['Категории','Два уровня, чтобы расходы всегда были на своём месте.']};
   $('#page-title').textContent = titles[state.view][0];
   $('#page-subtitle').textContent = titles[state.view][1];
   render();
@@ -209,7 +216,7 @@ function render() {
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   if (!state.ready) return;
   $(`#view-${state.view}`).classList.remove('hidden');
-  ({overview:renderOverview, ledger:renderLedger, loan:renderLoan, categories:renderCategories})[state.view]();
+  ({overview:renderOverview, ledger:renderLedger, documents:renderDocuments, loan:renderLoan, categories:renderCategories})[state.view]();
 }
 function metrics() {
   const expenses = state.expenses.filter(e => !e.deleted);
@@ -667,11 +674,81 @@ function documentQuickRow(item) {
   const source=item.source==='forwarded'?'переслано из Telegram':item.source==='telegram'?'Telegram':'веб';
   return `<li class="document-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(source)} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div><div class="document-actions"><button type="button" class="text-button" data-action="open-document" data-id="${item.id}">${item.previewable?'Открыть':'Скачать'}</button></div></li>`;
 }
-function documentTargetOptions(filters={}) {
+async function loadAttachedDocuments() {
+  if(attachedDocumentsLoading)return;
+  attachedDocumentsLoading=true;
+  try {
+    attachedDocuments=await pages('/v1/documents');
+    attachedDocumentsLoaded=true;
+    if(state.view==='documents')renderDocuments();
+  } catch(error) {
+    if(state.view==='documents')$('#view-documents').innerHTML=`<div class="notice error">${esc(error.message)}</div>`;
+  } finally {attachedDocumentsLoading=false;}
+}
+function attachedDocumentTarget(item) {
+  const kind=item.plan_id?'plan':'expense', identifier=item.plan_id||item.expense_id;
+  const record=(kind==='plan'?state.plans:state.expenses).find(entry=>entry.id===identifier);
+  return record?{kind,record,identifier}:null;
+}
+function renderDocuments() {
+  const panel=$('#view-documents');
+  if(!attachedDocumentsLoaded){
+    panel.innerHTML='<div class="loading"><span class="spinner"></span>Загружаю документы…</div>';
+    if(!attachedDocumentsLoading)loadAttachedDocuments();
+    return;
+  }
+  const terms=normalizedText(attachedDocumentSearch).split(' ').filter(Boolean);
+  const rows=attachedDocuments.map(item=>({item,target:attachedDocumentTarget(item)})).filter(({item,target})=>{
+    const record=target?.record;
+    const amount=record?(target.kind==='plan'?planAmount(record):record.amount):'';
+    const haystack=normalizedText([item.filename,item.note,item.source,record?.title||record?.description,record?.note,record?.category,record?.due_month||record?.paid_on,amount,record?rub(amount):''].join(' '));
+    return terms.every(term=>haystack.includes(term));
+  });
+  panel.innerHTML=`<article class="card"><div class="card-head"><div><h2>Прикреплённые документы</h2><p>Откройте файл, скачайте его или перенесите к другой статье.</p></div><span class="badge">${plural(attachedDocuments.length,'файл','файла','файлов')}</span></div><div class="toolbar"><input id="attached-document-search" type="search" value="${esc(attachedDocumentSearch)}" placeholder="Поиск по файлу, комментарию или статье" aria-label="Поиск документов"></div><div id="attached-document-results">${rows.length?rows.map(({item,target})=>{
+    const source=item.source==='forwarded'?'переслано из Telegram':item.source==='telegram'?'Telegram':'веб';
+    const record=target?.record;
+    const kind=target?.kind;
+    return `<div class="attached-document-row"><div class="attached-document-details"><strong>${esc(item.filename)}</strong><small>${esc(source)} · ${fileSize(item.size_bytes)} · ${dateLabel(item.created_at.slice(0,10))}</small>${item.note?`<p>${esc(item.note)}</p>`:''}<div class="attached-document-target">${record?documentTargetLabel(kind,record):'<span>Связанная запись недоступна</span>'}</div></div><div class="attached-document-actions"><button type="button" class="text-button" data-action="open-document" data-id="${esc(item.id)}">${item.previewable?'Открыть':'Скачать'}</button><a class="text-button" href="/v1/documents/${encodeURIComponent(item.id)}/content" download="${esc(item.filename)}">Скачать</a>${record?`<button type="button" class="text-button" data-action="edit-${kind}" data-id="${esc(target.identifier)}">К записи</button>`:''}<button type="button" class="text-button" data-action="open-document-move" data-id="${esc(item.id)}">Перенести</button><button type="button" class="text-button danger-text" data-action="delete-document" data-id="${esc(item.id)}">Удалить</button></div></div>`;
+  }).join(''):`<div class="document-empty">${attachedDocuments.length?'По запросу ничего не найдено.':'Прикреплённых документов пока нет.'}</div>`}</div></article>`;
+}
+function documentTargetChoices(filters={}, search='') {
   const category=filters.category2||filters.category1;
-  const plans=state.plans.filter(item=>!item.archived&&categoryMatches(item,category)).map(item=>`<option value="plan:${item.id}">${esc(`План · ${item.title} · ${monthLabel(item.due_month)} · ${rub(planAmount(item))} · ${item.category}`)}</option>`);
-  const expenses=state.expenses.filter(item=>!item.deleted&&categoryMatches(item,category)).map(item=>`<option value="expense:${item.id}">${esc(`Оплата · ${item.description} · ${dateLabel(item.paid_on)} · ${rub(item.amount)} · ${item.category}`)}</option>`);
-  return `<option value="">${plans.length||expenses.length?'Выберите план или оплату':'Нет статей в этой категории'}</option>`+plans.join('')+expenses.join('');
+  const terms=normalizedText(search).split(' ').filter(Boolean);
+  const matches=(kind,item)=>{
+    if(!categoryMatches(item,category))return false;
+    const amount=kind==='plan'?planAmount(item):item.amount;
+    const period=kind==='plan'?monthLabel(item.due_month):dateLabel(item.paid_on);
+    const haystack=normalizedText([kind==='plan'?'план':'оплата',item.title||item.description,item.note,item.category,item.due_month||item.paid_on,period,amount,rub(amount)].join(' '));
+    return terms.every(term=>haystack.includes(term));
+  };
+  return [
+    ...state.plans.filter(item=>!item.archived&&matches('plan',item)).map(item=>({kind:'plan',item})),
+    ...state.expenses.filter(item=>!item.deleted&&matches('expense',item)).map(item=>({kind:'expense',item})),
+  ];
+}
+function documentTargetLabel(kind,item) {
+  const amount=kind==='plan'?planAmount(item):item.amount;
+  const title=kind==='plan'?item.title:item.description;
+  const period=kind==='plan'?monthLabel(item.due_month):dateLabel(item.paid_on);
+  return `<span class="document-target-main">${kind==='plan'?'План':'Оплата'} <strong class="document-target-amount">${esc(rub(amount))}</strong> · ${esc(title)}</span><small>${esc(period)} · ${esc(item.category)}</small>`;
+}
+function selectedDocumentTarget(value) {
+  const [kind,identifier]=value.split(':',2);
+  const item=(kind==='plan'?state.plans:kind==='expense'?state.expenses:[]).find(entry=>entry.id===identifier);
+  return item?documentTargetLabel(kind,item):'<span class="document-target-placeholder">Выберите план или оплату</span>';
+}
+function documentTargetButtons(filters,search,action,documentId) {
+  const choices=documentTargetChoices(filters,search);
+  return choices.length?choices.map(({kind,item})=>`<button type="button" class="document-target-choice" data-action="${action}" data-document-id="${esc(documentId)}" data-target-kind="${kind}" data-target-id="${esc(item.id)}">${documentTargetLabel(kind,item)}</button>`).join(''):'<p class="document-target-empty">Подходящих статей нет. Измените поиск или категорию.</p>';
+}
+function documentTargetPicker(filters,search,selected,action,documentId) {
+  return `<details class="document-target-picker" data-target-picker="${esc(documentId)}"><summary aria-label="Выбрать статью для документа">${selectedDocumentTarget(selected)}</summary><div class="document-target-options">${documentTargetButtons(filters,search,action,documentId)}</div></details>`;
+}
+function refreshDocumentTargetPicker(identifier,filters,search,selected,action) {
+  const picker=$(`[data-target-picker="${identifier}"]`);
+  if(!picker)return;
+  picker.querySelector('summary').innerHTML=selectedDocumentTarget(selected);
+  picker.querySelector('.document-target-options').innerHTML=documentTargetButtons(filters,search,action,identifier);
 }
 function documentInboxSubcategories(category1) {
   return '<option value="">Все подкатегории</option>'+state.categories.filter(item=>item.parent_id===category1).map(item=>`<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
@@ -679,12 +756,11 @@ function documentInboxSubcategories(category1) {
 function documentInboxControls(item) {
   const filters=documentInboxSelections.get(item.id)||{category1:'',category2:'',target:''};
   const filename=esc(item.filename), identifier=esc(item.id);
-  return `<div class="document-inbox-controls"><button type="button" class="text-button" data-action="open-document" data-id="${identifier}">${item.previewable?'Открыть':'Скачать'}</button><div class="document-inbox-fields"><div class="document-inbox-filters"><select data-document-filter="category1" data-id="${identifier}" aria-label="Категория для ${filename}"><option value="">Все категории</option>${state.categories.filter(category=>!category.parent_id).map(category=>`<option value="${esc(category.id)}" ${category.id===filters.category1?'selected':''}>${esc(category.name)}</option>`).join('')}</select><select data-document-filter="category2" data-id="${identifier}" aria-label="Подкатегория для ${filename}" ${filters.category1?'':'disabled'}>${documentInboxSubcategories(filters.category1)}</select></div><select id="document-target-${identifier}" data-document-target="${identifier}" aria-label="Статья для ${filename}">${documentTargetOptions(filters)}</select></div><button type="button" class="button primary" data-action="attach-inbox-document" data-id="${identifier}">Прикрепить</button></div>`;
+  return `<div class="document-inbox-controls"><button type="button" class="text-button" data-action="open-document" data-id="${identifier}">${item.previewable?'Открыть':'Скачать'}</button><div class="document-inbox-fields"><div class="document-inbox-filters"><select data-document-filter="category1" data-id="${identifier}" aria-label="Категория для ${filename}"><option value="">Все категории</option>${state.categories.filter(category=>!category.parent_id).map(category=>`<option value="${esc(category.id)}" ${category.id===filters.category1?'selected':''}>${esc(category.name)}</option>`).join('')}</select><select data-document-filter="category2" data-id="${identifier}" aria-label="Подкатегория для ${filename}" ${filters.category1?'':'disabled'}>${documentInboxSubcategories(filters.category1)}</select></div>${documentTargetPicker(filters,documentTargetSearch,filters.target,'choose-document-target',item.id)}</div><button type="button" class="button primary" data-action="attach-inbox-document" data-id="${identifier}">Прикрепить</button></div>`;
 }
 function updateDocumentInboxSelection(input) {
-  const identifier=input.dataset.id||input.dataset.documentTarget;
+  const identifier=input.dataset.id;
   const filters=documentInboxSelections.get(identifier)||{category1:'',category2:'',target:''};
-  if(input.dataset.documentTarget){filters.target=input.value;documentInboxSelections.set(identifier,filters);return;}
   if(input.dataset.documentFilter==='category1'){
     filters.category1=input.value;
     filters.category2='';
@@ -692,39 +768,80 @@ function updateDocumentInboxSelection(input) {
     subcategory.innerHTML=documentInboxSubcategories(filters.category1);
     subcategory.disabled=!filters.category1;
   } else filters.category2=input.value;
-  const target=$(`#document-target-${identifier}`);
-  target.innerHTML=documentTargetOptions(filters);
-  if([...target.options].some(option=>option.value===filters.target))target.value=filters.target;
-  else filters.target='';
+  if(!documentTargetChoices(filters).some(choice=>`${choice.kind}:${choice.item.id}`===filters.target))filters.target='';
   documentInboxSelections.set(identifier,filters);
+  refreshDocumentTargetPicker(identifier,filters,documentTargetSearch,filters.target,'choose-document-target');
 }
 function renderDocumentInbox() {
   const dialog=$('#document-inbox-dialog'), panel=$('#document-inbox-content');
   if (!inboxDocuments.length) { dialog.close(); return; }
-  panel.innerHTML=`<div class="document-dialog-body"><p class="muted">Файлы не попадут в учёт, пока вы не выберете план или оплату. Комментарий из Telegram показан под именем файла.</p><ul class="document-list document-inbox-list">${inboxDocuments.map(item=>`<li class="document-inbox-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(item.source==='forwarded'?'переслано из Telegram':'Telegram')} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div>${documentInboxControls(item)}</li>`).join('')}</ul><div class="form-actions"><button type="button" class="button secondary" data-action="close-document-inbox">Разобрать позже</button></div></div>`;
+  panel.innerHTML=`<div class="document-dialog-body"><p class="muted">Файлы не попадут в учёт, пока вы не выберете план или оплату. Комментарий из Telegram показан под именем файла.</p><label class="document-search-label" for="document-target-search">Найти статью по названию, примечанию или категории</label><input id="document-target-search" type="search" value="${esc(documentTargetSearch)}" placeholder="Например, коммуналка или кухня" autocomplete="off"><ul class="document-list document-inbox-list">${inboxDocuments.map(item=>`<li class="document-inbox-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(item.source==='forwarded'?'переслано из Telegram':'Telegram')} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div>${documentInboxControls(item)}</li>`).join('')}</ul><div class="form-actions"><button type="button" class="button secondary" data-action="close-document-inbox">Разобрать позже</button></div></div>`;
   documentInboxSelections.forEach((filters,identifier)=>{
     const subcategory=$(`[data-document-filter="category2"][data-id="${identifier}"]`);
     if(subcategory)subcategory.value=filters.category2;
-    const target=$(`#document-target-${identifier}`);
-    if(target)target.value=filters.target;
   });
   if (!dialog.open) dialog.showModal();
 }
 async function openDocumentInbox() {
   inboxDocuments=await request('/v1/documents/inbox');
   documentInboxSelections.clear();
+  documentTargetSearch='';
   if (inboxDocuments.length) renderDocumentInbox();
 }
 async function attachInboxDocument(identifier) {
-  const selected=$(`#document-target-${identifier}`)?.value;
+  const selected=documentInboxSelections.get(identifier)?.target;
   if (!selected) throw new Error('Выберите план или оплату.');
   const [targetType,targetId]=selected.split(':',2);
   await mutation(`/v1/documents/${identifier}/attach?`+new URLSearchParams({target_type:targetType,target_id:targetId}),'PUT',{});
   inboxDocuments=inboxDocuments.filter(item=>item.id!==identifier);
   documentInboxSelections.delete(identifier);
   await loadData();
+  if(state.view==='documents'){attachedDocumentsLoaded=false;await loadAttachedDocuments();}
   renderDocumentInbox();
   notify('Документ прикреплён');
+}
+function renderDocumentMove() {
+  if(!documentMove)return;
+  const item=attachedDocuments.find(value=>value.id===documentMove.id);
+  if(!item)return;
+  const panel=$('#document-move-content');
+  panel.innerHTML=`<div class="document-dialog-body"><p class="muted">${esc(item.filename)}${item.note?' · '+esc(item.note):''}</p><label class="document-search-label" for="document-move-search">Найти план или оплату</label><input id="document-move-search" type="search" value="${esc(documentMove.search)}" placeholder="Название, примечание или категория" autocomplete="off"><div class="document-inbox-filters document-move-filters"><select data-move-filter="category1" aria-label="Категория"><option value="">Все категории</option>${state.categories.filter(category=>!category.parent_id).map(category=>`<option value="${esc(category.id)}" ${category.id===documentMove.category1?'selected':''}>${esc(category.name)}</option>`).join('')}</select><select data-move-filter="category2" aria-label="Подкатегория" ${documentMove.category1?'':'disabled'}>${documentInboxSubcategories(documentMove.category1)}</select></div>${documentTargetPicker(documentMove,documentMove.search,documentMove.target,'choose-move-target',item.id)}<div class="form-actions"><button type="button" class="button secondary" data-action="close-document-move">Отмена</button><button type="button" class="button primary" data-action="save-document-move">Перенести</button></div></div>`;
+  $('[data-move-filter="category2"]',panel).value=documentMove.category2;
+}
+function openDocumentMove(identifier) {
+  const item=attachedDocuments.find(value=>value.id===identifier);
+  if(!item)throw new Error('Документ не найден. Обновите раздел.');
+  documentMove={id:identifier,target:item.plan_id?`plan:${item.plan_id}`:`expense:${item.expense_id}`,category1:'',category2:'',search:''};
+  renderDocumentMove();
+  $('#document-move-dialog').showModal();
+}
+function updateDocumentMoveFilter(input) {
+  if(!documentMove)return;
+  const field=input.dataset.moveFilter;
+  documentMove[field]=input.value;
+  if(field==='category1'){
+    documentMove.category2='';
+    const subcategory=$('[data-move-filter="category2"]');
+    subcategory.innerHTML=documentInboxSubcategories(documentMove.category1);
+    subcategory.disabled=!documentMove.category1;
+  }
+  refreshDocumentTargetPicker(documentMove.id,documentMove,documentMove.search,documentMove.target,'choose-move-target');
+}
+async function saveDocumentMove() {
+  if(!documentMove?.target)throw new Error('Выберите план или оплату.');
+  const move=documentMove;
+  const item=attachedDocuments.find(value=>value.id===move.id);
+  const previous=item.plan_id?`plan:${item.plan_id}`:`expense:${item.expense_id}`;
+  if(move.target!==previous){
+    const [targetType,targetId]=move.target.split(':',2);
+    await mutation(`/v1/documents/${move.id}/move?`+new URLSearchParams({target_type:targetType,target_id:targetId}),'PUT',{});
+    await loadData();
+    attachedDocumentsLoaded=false;
+    await loadAttachedDocuments();
+    notify('Документ перенесён');
+  }
+  $('#document-move-dialog').close();
+  if(documentMove===move)documentMove=null;
 }
 async function openDocumentList(kind, identifier) {
   const item=(kind==='expense'?state.expenses:state.plans).find(value=>value.id===identifier);
@@ -764,18 +881,29 @@ async function uploadDocument() {
   let result;try{result=await response.json();}catch{throw new Error('Сервер вернул непонятный ответ.');}
   if(!response.ok)throw new Error(result.detail||'Не удалось прикрепить файл.');
   notify('Документ прикреплён');
+  await loadData();
+  if(state.view==='documents'){attachedDocumentsLoaded=false;await loadAttachedDocuments();}
   await loadDocumentPanel(editing.kind,editing.item.id);
 }
 async function attachDocument(identifier) {
   if(!editing?.item?.id || !['expense','plan'].includes(editing.kind)) throw new Error('Откройте оплату или план.');
   await mutation(`/v1/documents/${identifier}/attach?`+new URLSearchParams({target_type:editing.kind,target_id:editing.item.id}),'PUT',{});
   notify('Документ прикреплён');
+  await loadData();
+  if(state.view==='documents'){attachedDocumentsLoaded=false;await loadAttachedDocuments();}
   await loadDocumentPanel(editing.kind,editing.item.id);
 }
 async function deleteDocument(identifier) {
   if(!await confirmAction('Удалить документ?','Файл будет удалён из рабочего учёта без возможности восстановления.','Удалить')) return;
   await mutation(`/v1/documents/${identifier}`,'DELETE',{});
   notify('Документ удалён');
+  inboxDocuments=inboxDocuments.filter(item=>item.id!==identifier);
+  if($('#document-inbox-dialog').open)renderDocumentInbox();
+  await loadData();
+  if(state.view==='documents'){
+    attachedDocumentsLoaded=false;
+    await loadAttachedDocuments();
+  }
   if(editing?.item?.id&&['expense','plan'].includes(editing.kind)) await loadDocumentPanel(editing.kind,editing.item.id);
 }
 function openEditor(kind, item=null, focusField='') {
@@ -998,9 +1126,25 @@ async function handleAction(event) {
     else if (action==='clear-selected-plans') {state.ledgerSelectedPlanIds.clear();renderLedger();}
     else if (action==='bulk-move-plans') await bulkMovePlans();
     else if (action==='quick-documents') await openDocumentList(target.dataset.kind,id);
+    else if (action==='choose-document-target') {
+      const identifier=target.dataset.documentId;
+      const filters=documentInboxSelections.get(identifier)||{category1:'',category2:'',target:''};
+      filters.target=`${target.dataset.targetKind}:${target.dataset.targetId}`;
+      documentInboxSelections.set(identifier,filters);
+      refreshDocumentTargetPicker(identifier,filters,documentTargetSearch,filters.target,'choose-document-target');
+      $(`[data-target-picker="${identifier}"]`).open=false;
+    }
     else if (action==='attach-inbox-document') await attachInboxDocument(id);
     else if (action==='close-document-inbox') $('#document-inbox-dialog').close();
     else if (action==='close-document-list') $('#document-list-dialog').close();
+    else if (action==='open-document-move') openDocumentMove(id);
+    else if (action==='choose-move-target') {
+      documentMove.target=`${target.dataset.targetKind}:${target.dataset.targetId}`;
+      refreshDocumentTargetPicker(documentMove.id,documentMove,documentMove.search,documentMove.target,'choose-move-target');
+      $(`[data-target-picker="${documentMove.id}"]`).open=false;
+    }
+    else if (action==='save-document-move') await saveDocumentMove();
+    else if (action==='close-document-move') {$('#document-move-dialog').close();documentMove=null;}
     else if (action==='upload-document') await uploadDocument();
     else if (action==='attach-document') await attachDocument(id);
     else if (action==='delete-document') await deleteDocument(id);
@@ -1081,12 +1225,36 @@ document.addEventListener('drop',async event=>{
 document.addEventListener('pointermove',updateChartTooltip);
 document.addEventListener('scroll',hideChartTooltip,true);
 document.addEventListener('submit',event=>{if(event.target.id==='record-form')saveForm(event);});
-document.addEventListener('input',event=>{if(event.target.type==='search')updateFilter(event);});
+document.addEventListener('input',event=>{
+  if(event.target.id==='document-target-search'){
+    documentTargetSearch=event.target.value;
+    inboxDocuments.forEach(item=>{
+      const filters=documentInboxSelections.get(item.id)||{category1:'',category2:'',target:''};
+      refreshDocumentTargetPicker(item.id,filters,documentTargetSearch,filters.target,'choose-document-target');
+    });
+    return;
+  }
+  if(event.target.id==='document-move-search'&&documentMove){
+    documentMove.search=event.target.value;
+    refreshDocumentTargetPicker(documentMove.id,documentMove,documentMove.search,documentMove.target,'choose-move-target');
+    return;
+  }
+  if(event.target.id==='attached-document-search'){
+    attachedDocumentSearch=event.target.value;
+    const position=event.target.selectionStart;
+    renderDocuments();
+    const replacement=$('#attached-document-search');
+    replacement.focus();replacement.setSelectionRange(position,position);
+    return;
+  }
+  if(event.target.type==='search')updateFilter(event);
+});
 document.addEventListener('change',async event=>{
-  if(event.target.matches('[data-document-filter],[data-document-target]')){
+  if(event.target.matches('[data-document-filter]')){
     updateDocumentInboxSelection(event.target);
     return;
   }
+  if(event.target.matches('[data-move-filter]')){updateDocumentMoveFilter(event.target);return;}
   if(event.target.matches('[data-page-select]')){
     state[event.target.dataset.kind+'Page']=Number(event.target.value);
     render();
@@ -1111,6 +1279,7 @@ document.addEventListener('change',async event=>{
 $('#editor').addEventListener('cancel',event=>{event.preventDefault();closeEditor();});
 $('#document-inbox-dialog').addEventListener('cancel',event=>{event.preventDefault();event.currentTarget.close();});
 $('#document-list-dialog').addEventListener('cancel',event=>{event.preventDefault();event.currentTarget.close();});
+$('#document-move-dialog').addEventListener('cancel',event=>{event.preventDefault();event.currentTarget.close();documentMove=null;});
 window.addEventListener('hashchange',()=>navigate(location.hash.slice(1)));
 window.addEventListener('beforeunload',event=>{if(dirtyForm()){event.preventDefault();event.returnValue='';}});
 async function start() {
