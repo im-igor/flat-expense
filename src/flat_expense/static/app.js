@@ -669,8 +669,8 @@ function documentQuickRow(item) {
 }
 function documentTargetOptions(filters={}) {
   const category=filters.category2||filters.category1;
-  const plans=state.plans.filter(item=>!item.archived&&categoryMatches(item,category)).map(item=>`<option value="plan:${item.id}">${esc(`План · ${item.title} · ${monthLabel(item.due_month)} · ${item.category}`)}</option>`);
-  const expenses=state.expenses.filter(item=>!item.deleted&&categoryMatches(item,category)).map(item=>`<option value="expense:${item.id}">${esc(`Оплата · ${item.description} · ${dateLabel(item.paid_on)} · ${item.category}`)}</option>`);
+  const plans=state.plans.filter(item=>!item.archived&&categoryMatches(item,category)).map(item=>`<option value="plan:${item.id}">${esc(`План · ${item.title} · ${monthLabel(item.due_month)} · ${rub(planAmount(item))} · ${item.category}`)}</option>`);
+  const expenses=state.expenses.filter(item=>!item.deleted&&categoryMatches(item,category)).map(item=>`<option value="expense:${item.id}">${esc(`Оплата · ${item.description} · ${dateLabel(item.paid_on)} · ${rub(item.amount)} · ${item.category}`)}</option>`);
   return `<option value="">${plans.length||expenses.length?'Выберите план или оплату':'Нет статей в этой категории'}</option>`+plans.join('')+expenses.join('');
 }
 function documentInboxSubcategories(category1) {
