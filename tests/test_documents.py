@@ -22,6 +22,7 @@ def test_documents_are_shared_by_allowed_bot_accounts_and_can_be_deleted(client,
 
     listed = client.get(f"/v1/expenses/{expense['id']}/documents", headers=headers)
     assert [item["id"] for item in listed.json()] == [document["id"]]
+    assert client.get(f"/v1/expenses/{expense['id']}", headers=headers).json()["document_count"] == 1
     content = client.get(f"/v1/documents/{document['id']}/content", headers=headers)
     assert content.content == PDF
     assert content.headers["content-type"].startswith("application/pdf")
@@ -62,6 +63,7 @@ def test_telegram_inbox_document_can_be_attached_to_a_plan(client, headers, cate
     assert attached.json()["plan_id"] == plan["id"]
     assert client.get("/v1/documents/inbox", headers=headers).json() == []
     assert client.get(f"/v1/plans/{plan['id']}/documents", headers=headers).json()[0]["id"] == document["id"]
+    assert client.get(f"/v1/plans/{plan['id']}", headers=headers).json()["document_count"] == 1
 
 
 def test_document_validation_and_plan_delete_guard(client, headers, category):

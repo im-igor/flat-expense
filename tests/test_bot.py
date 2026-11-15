@@ -106,7 +106,7 @@ def test_expense_can_find_plan_by_word_and_record_payment(client, headers, categ
     chat.click("Работы")
     chat.click("Найти план")
     chat.send("двери")
-    chat.click("Двери · 2 500,00 ₽")
+    chat.click("Двери · 2027-06 · Ремонт → Работы · 2 500,00 ₽")
     assert "Записать оплату в план?" in chat.last["messages"][0]["text"]
     chat.click("Внести ещё сумму")
     saved = client.get("/v1/plans/" + plan["id"], headers=headers).json()
@@ -127,7 +127,7 @@ def test_expense_can_find_plan_by_category(client, headers, category):
     chat.click("Найти план")
     chat.click("Ремонт")
     chat.click("Вся категория: Ремонт")
-    chat.click("Малярные работы · 5 000,00 ₽")
+    chat.click("Малярные работы · 2027-06 · Ремонт → Работы · 5 000,00 ₽")
     chat.click("Внести ещё сумму")
     saved = client.get("/v1/plans/" + plan["id"], headers=headers).json()
     assert saved["paid_amount"] == "800.00"

@@ -177,6 +177,15 @@ td.num .inline-edit { text-align: right; }
 .document-upload { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 1fr) auto; gap: 8px; align-items: center; }
 .document-upload input { min-width: 0; font-size: 11px; padding: 8px; }
 .document-inbox-title { margin-top: 22px; }
+.document-button { border: 0; background: transparent; color: var(--green); font-size: 11px; font-weight: 600; margin: 6px 0 0; padding: 0; }
+.document-button:hover { text-decoration: underline; }
+#document-inbox-dialog, #document-list-dialog { width: min(820px, calc(100% - 30px)); }
+.document-dialog-body { padding: 22px 28px 0; }
+.document-dialog-body > .muted { font-size: 12px; }
+.document-inbox-row { padding: 15px 0; border-bottom: 1px solid #edf0e9; }
+.document-inbox-controls { display: grid; grid-template-columns: auto minmax(240px, 1fr) auto; gap: 10px; align-items: center; margin-top: 11px; }
+.document-inbox-controls select { min-width: 0; font-size: 12px; }
+@media (max-width: 600px) { .document-dialog-body { padding: 20px 20px 0; } .document-inbox-controls { grid-template-columns: 1fr; align-items: stretch; } }
 .pagination { display: grid; grid-template-columns: 66px 96px 66px; gap: 10px; align-items: center; justify-content: end; }
 .pagination .text-button { min-width: 66px; white-space: nowrap; }
 .page-picker select { min-width: 96px; min-height: 32px; padding: 6px 8px; font-size: 11px; }

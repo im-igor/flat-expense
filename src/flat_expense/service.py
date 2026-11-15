@@ -273,7 +273,18 @@ def replace_category(db: Session, owner: int, identifier: str, target_id: str) -
     return result
 
 
-def expense_view(db: Session, item: Expense) -> dict:
+def document_counts(db: Session, field: str, identifiers: list[str]) -> dict[str, int]:
+    if not identifiers:
+        return {}
+    column = getattr(Document, field)
+    return dict(
+        db.execute(
+            select(column, func.count()).where(column.in_(identifiers)).group_by(column)
+        ).all()
+    )
+
+
+def expense_view(db: Session, item: Expense, document_count: int | None = None) -> dict:
     category = owned(db, Category, 0, item.category_id)
     return {
         "id": item.id,
@@ -286,6 +297,11 @@ def expense_view(db: Session, item: Expense) -> dict:
         "note": item.note,
         "needs_review": item.needs_review,
         "deleted": item.deleted,
+        "document_count": (
+            document_count
+            if document_count is not None
+            else document_counts(db, "expense_id", [item.id]).get(item.id, 0)
+        ),
         "version": item.version,
     }
 
@@ -406,7 +422,7 @@ def audit(db: Session, owner: int, entity: str, identifier: str, action: str, be
     )
 
 
-def plan_view(db: Session, item: Plan) -> dict:
+def plan_view(db: Session, item: Plan, document_count: int | None = None) -> dict:
     category = owned(db, Category, 0, item.category_id)
     planned_minor = plan_amount_minor(item)
     return {
@@ -424,6 +440,11 @@ def plan_view(db: Session, item: Plan) -> dict:
         "payment_status": item.payment_status,
         "note": item.note,
         "archived": item.archived,
+        "document_count": (
+            document_count
+            if document_count is not None
+            else document_counts(db, "plan_id", [item.id]).get(item.id, 0)
+        ),
         "version": item.version,
     }
 
@@ -732,7 +753,9 @@ def list_expenses(db: Session, owner: int, offset=0, limit=10, deleted=False):
         .offset(offset)
         .limit(limit)
     )
-    return [expense_view(db, e) for e in db.scalars(query)]
+    items = list(db.scalars(query))
+    counts = document_counts(db, "expense_id", [item.id for item in items])
+    return [expense_view(db, item, counts.get(item.id, 0)) for item in items]
 
 
 def list_plans(db: Session, owner: int, offset=0, limit=10, archived=False):
@@ -743,7 +766,9 @@ def list_plans(db: Session, owner: int, offset=0, limit=10, archived=False):
         .offset(offset)
         .limit(limit)
     )
-    return [plan_view(db, p) for p in db.scalars(query)]
+    items = list(db.scalars(query))
+    counts = document_counts(db, "plan_id", [item.id for item in items])
+    return [plan_view(db, item, counts.get(item.id, 0)) for item in items]
 
 
 def summary(db: Session, owner: int, start: date, end: date):

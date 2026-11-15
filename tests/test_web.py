@@ -323,6 +323,18 @@ def test_finalized_plan_uses_the_paid_status_and_row_style(browser):
     assert "closed?'paid-row':''" in asset
 
 
+def test_documents_from_telegram_open_a_distribution_dialog(browser):
+    page = browser.get("/").text
+    asset = browser.get("/assets/app.js").text
+    assert 'id="document-inbox-dialog"' in page
+    assert 'id="document-list-dialog"' in page
+    assert "function openDocumentInbox()" in asset
+    assert "function attachInboxDocument(identifier)" in asset
+    assert "function documentButton(kind, item)" in asset
+    assert "Комментарий из Telegram" in asset
+    assert "item.note" in asset
+
+
 def test_ledger_removes_cumulative_month_totals(browser):
     browser.get("/")
     asset = browser.get("/assets/app.js").text

@@ -58,6 +58,11 @@ def plan_card(item):
     )
 
 
+def plan_choice_label(item):
+    month = (item["due_month"] or "без даты")[:7]
+    return f"{item['title']} · {month} · {item['category']} · {rub(item['remaining_amount'])}"
+
+
 class Conversation:
     def __init__(self, db, owner, ai=None):
         self.db, self.owner = db, owner
@@ -336,7 +341,7 @@ class Conversation:
             rows = [
                 [
                     self.cb(
-                        f"{plan['title']} · {rub(plan['remaining_amount'])}",
+                        plan_choice_label(plan),
                         "plan:" + plan["id"],
                     )
                 ]
@@ -663,7 +668,11 @@ class Conversation:
         rows = [
             [
                 button(
-                    f"{i.get('description', i.get('title'))[:35]} · {rub(i.get('amount', i.get('agreed') or i.get('expected')))}",
+                    (
+                        i["description"][:35] + " · " + rub(i["amount"])
+                        if is_expense
+                        else plan_choice_label(i)
+                    ),
                     ("ve:" if is_expense else "vp:") + i["id"],
                 )
             ]

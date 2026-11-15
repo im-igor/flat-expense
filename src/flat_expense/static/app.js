@@ -6,6 +6,7 @@ const state = {categories: [], expenses: [], plans: [], loan: [], today: '', mov
 let editing = null;
 let pendingRequest = null;
 let toastTimer;
+let inboxDocuments = [];
 const PAGE_SIZE = 15;
 const LOAN_CATEGORY_ID = '__loan__';
 const LOAN_PAYMENT_CATEGORY_ID = '__loan-payment__';
@@ -436,7 +437,7 @@ function ledgerRowMarkup(kind,item) {
     const review=item.needs_review&&!item.deleted;
     const status=item.deleted?'<span class="badge gray">Удалена</span>':review?'<span class="badge amber">Разобрать</span>':'<span class="badge paid">Оплачено</span>';
     const action=item.deleted?`<button class="text-button" data-action="restore-expense" data-id="${item.id}">Восстановить</button>`:review?`<button class="text-button" data-action="resolve-expense-review" data-id="${item.id}">Самостоятельный</button><button class="text-button" data-action="edit-expense" data-id="${item.id}">Изменить</button>`:`<button class="text-button" data-action="edit-expense" data-id="${item.id}">Изменить</button>`;
-    return `<tr class="${item.deleted?'inactive-row':review?'needs-review-row':'paid-row'}" ${review?`draggable="true" data-expense-id="${item.id}" title="Перетащите оплату на нужный план"`:''}><td class="ledger-select-cell"></td><td class="date-cell">${editableValue('expense',item,'paid_on',dateLabel(item.paid_on))}</td><td>${editableValue('expense',item,'category1',first)}</td>${categoryCell('expense',item)}<td>${editableValue('expense',item,'description',item.description,'table-main')}</td><td class="num">${editableValue('expense',item,'planned_amount',rub(item.planned_amount))}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num bold-num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${rub(0n)}</td><td>${status}</td><td>${editableValue('expense',item,'note',item.note||'—','table-note')}</td><td>${action}</td></tr>`;
+    return `<tr class="${item.deleted?'inactive-row':review?'needs-review-row':'paid-row'}" ${review?`draggable="true" data-expense-id="${item.id}" title="Перетащите оплату на нужный план"`:''}><td class="ledger-select-cell"></td><td class="date-cell">${editableValue('expense',item,'paid_on',dateLabel(item.paid_on))}</td><td>${editableValue('expense',item,'category1',first)}</td>${categoryCell('expense',item)}<td>${editableValue('expense',item,'description',item.description,'table-main')}${documentButton('expense',item)}</td><td class="num">${editableValue('expense',item,'planned_amount',rub(item.planned_amount))}</td><td class="num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num bold-num">${editableValue('expense',item,'amount',rub(item.amount))}</td><td class="num">${rub(0n)}</td><td>${status}</td><td>${editableValue('expense',item,'note',item.note||'—','table-note')}</td><td>${action}</td></tr>`;
   }
   if(kind==='loan'){
     const paid=item.payment_date<=state.today;
@@ -447,7 +448,7 @@ function ledgerRowMarkup(kind,item) {
   const closed=['paid','finalized'].includes(item.payment_status);
   const actions=item.archived?`<button class="text-button" data-action="restore-plan" data-id="${item.id}">Вернуть</button>`:`${cents(item.paid_amount)>0n?`<button class="text-button" data-action="edit-plan-paid-amount" data-id="${item.id}">Изменить факт</button>`:''}${['paid','finalized'].includes(item.payment_status)?'':`<button class="text-button" data-action="record-plan-payment" data-id="${item.id}">Внести оплату</button><button class="text-button" data-action="finalize-plan" data-id="${item.id}">Финализировать</button>`}<button class="text-button" data-action="edit-plan" data-id="${item.id}">Изменить</button>`;
   const acceptsExpense=!item.archived&&!['paid','finalized'].includes(item.payment_status);
-  return `<tr class="${item.archived?'inactive-row':closed?'paid-row':''}${acceptsExpense?' plan-drop-target':''}" ${acceptsExpense?`data-plan-id="${item.id}" title="Перетащите сюда неразобранную оплату"`:''}><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
+  return `<tr class="${item.archived?'inactive-row':closed?'paid-row':''}${acceptsExpense?' plan-drop-target':''}" ${acceptsExpense?`data-plan-id="${item.id}" title="Перетащите сюда неразобранную оплату"`:''}><td class="ledger-select-cell">${select}</td><td class="date-cell">${editableValue('plan',item,'due_month',monthLabel(item.due_month))}</td><td>${editableValue('plan',item,'category1',first)}</td>${categoryCell('plan',item)}<td>${editableValue('plan',item,'title',item.title,'table-main')}${documentButton('plan',item)}</td>${planCell}<td class="num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.paid_amount===null?'—':rub(item.paid_amount)}</td><td class="num bold-num">${item.remaining_amount===null?'Не оценено':rub(item.remaining_amount)}</td><td>${planStatus(item)}</td><td>${editableValue('plan',item,'note',item.note||'—','table-note')}</td><td>${actions}</td></tr>`;
 }
 function ledgerSummary(rows) {
   let paid=0n,plan=0n;
@@ -655,6 +656,52 @@ function fileSize(bytes) {
 function documentRow(item, inbox=false) {
   const source=item.source==='forwarded'?'переслано из Telegram':item.source==='telegram'?'Telegram':'веб';
   return `<li class="document-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(source)} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div><div class="document-actions"><button type="button" class="text-button" data-action="open-document" data-id="${item.id}">${item.previewable?'Открыть':'Скачать'}</button>${inbox?'<button type="button" class="text-button" data-action="attach-document" data-id="'+item.id+'">Прикрепить</button>':''}<button type="button" class="text-button danger-text" data-action="delete-document" data-id="${item.id}">Удалить</button></div></li>`;
+}
+function documentButton(kind, item) {
+  if (!item.document_count) return '';
+  const label=`Документы: ${item.document_count}`;
+  return `<button type="button" class="document-button" data-action="quick-documents" data-kind="${kind}" data-id="${item.id}" aria-label="${label}" title="${label}">📎 ${item.document_count}</button>`;
+}
+function documentQuickRow(item) {
+  const source=item.source==='forwarded'?'переслано из Telegram':item.source==='telegram'?'Telegram':'веб';
+  return `<li class="document-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(source)} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div><div class="document-actions"><button type="button" class="text-button" data-action="open-document" data-id="${item.id}">${item.previewable?'Открыть':'Скачать'}</button></div></li>`;
+}
+function documentTargetOptions() {
+  const plans=state.plans.filter(item=>!item.archived).map(item=>`<option value="plan:${item.id}">План · ${esc(item.title)} · ${esc(monthLabel(item.due_month))} · ${esc(item.category)}</option>`);
+  const expenses=state.expenses.filter(item=>!item.deleted).map(item=>`<option value="expense:${item.id}">Оплата · ${esc(item.description)} · ${esc(dateLabel(item.paid_on))} · ${esc(item.category)}</option>`);
+  return '<option value="">Выберите план или оплату</option>'+plans.join('')+expenses.join('');
+}
+function renderDocumentInbox() {
+  const dialog=$('#document-inbox-dialog'), panel=$('#document-inbox-content');
+  if (!inboxDocuments.length) { dialog.close(); return; }
+  panel.innerHTML=`<div class="document-dialog-body"><p class="muted">Файлы не попадут в учёт, пока вы не выберете план или оплату. Комментарий из Telegram показан под именем файла.</p><ul class="document-list document-inbox-list">${inboxDocuments.map(item=>`<li class="document-inbox-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(item.source==='forwarded'?'переслано из Telegram':'Telegram')} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div><div class="document-inbox-controls"><button type="button" class="text-button" data-action="open-document" data-id="${item.id}">${item.previewable?'Открыть':'Скачать'}</button><select id="document-target-${item.id}" aria-label="Статья для ${esc(item.filename)}">${documentTargetOptions()}</select><button type="button" class="button primary" data-action="attach-inbox-document" data-id="${item.id}">Прикрепить</button></div></li>`).join('')}</ul><div class="form-actions"><button type="button" class="button secondary" data-action="close-document-inbox">Разобрать позже</button></div></div>`;
+  if (!dialog.open) dialog.showModal();
+}
+async function openDocumentInbox() {
+  inboxDocuments=await request('/v1/documents/inbox');
+  if (inboxDocuments.length) renderDocumentInbox();
+}
+async function attachInboxDocument(identifier) {
+  const selected=$(`#document-target-${identifier}`)?.value;
+  if (!selected) throw new Error('Выберите план или оплату.');
+  const [targetType,targetId]=selected.split(':',2);
+  await mutation(`/v1/documents/${identifier}/attach?`+new URLSearchParams({target_type:targetType,target_id:targetId}),'PUT',{});
+  inboxDocuments=inboxDocuments.filter(item=>item.id!==identifier);
+  await loadData();
+  renderDocumentInbox();
+  notify('Документ прикреплён');
+}
+async function openDocumentList(kind, identifier) {
+  const item=(kind==='expense'?state.expenses:state.plans).find(value=>value.id===identifier);
+  if (!item) throw new Error('Запись не найдена. Обновите список.');
+  const dialog=$('#document-list-dialog'), panel=$('#document-list-content');
+  $('#document-list-title').textContent=kind==='expense'?item.description:item.title;
+  panel.innerHTML='<div class="document-dialog-body"><p class="muted">Загружаю документы…</p></div>';
+  dialog.showModal();
+  try {
+    const documents=await request(`/v1/${kind==='expense'?'expenses':'plans'}/${identifier}/documents`);
+    panel.innerHTML=`<div class="document-dialog-body"><ul class="document-list">${documents.length?documents.map(documentQuickRow).join(''):'<li class="document-empty">Документы не найдены.</li>'}</ul><div class="form-actions"><button type="button" class="button secondary" data-action="close-document-list">Закрыть</button></div></div>`;
+  } catch(error) { panel.innerHTML=`<div class="document-dialog-body"><p class="form-error">${esc(error.message)}</p></div>`; }
 }
 function documentContentType(file) {
   if(file.type) return file.type;
@@ -915,6 +962,10 @@ async function handleAction(event) {
     else if (action==='select-filtered-plans') {state.ledgerSelectedPlanIds=new Set(selectablePlanRows(ledgerRows()).map(row=>row.item.id));renderLedger();}
     else if (action==='clear-selected-plans') {state.ledgerSelectedPlanIds.clear();renderLedger();}
     else if (action==='bulk-move-plans') await bulkMovePlans();
+    else if (action==='quick-documents') await openDocumentList(target.dataset.kind,id);
+    else if (action==='attach-inbox-document') await attachInboxDocument(id);
+    else if (action==='close-document-inbox') $('#document-inbox-dialog').close();
+    else if (action==='close-document-list') $('#document-list-dialog').close();
     else if (action==='upload-document') await uploadDocument();
     else if (action==='attach-document') await attachDocument(id);
     else if (action==='delete-document') await deleteDocument(id);
@@ -1019,6 +1070,8 @@ document.addEventListener('change',async event=>{
   }
 });
 $('#editor').addEventListener('cancel',event=>{event.preventDefault();closeEditor();});
+$('#document-inbox-dialog').addEventListener('cancel',event=>{event.preventDefault();event.currentTarget.close();});
+$('#document-list-dialog').addEventListener('cancel',event=>{event.preventDefault();event.currentTarget.close();});
 window.addEventListener('hashchange',()=>navigate(location.hash.slice(1)));
 window.addEventListener('beforeunload',event=>{if(dirtyForm()){event.preventDefault();event.returnValue='';}});
 async function start() {
@@ -1030,6 +1083,7 @@ async function start() {
     const existing=await request('/v1/categories');
     if(!existing.length)await request('/v1/categories/seed',{method:'POST'});
     await loadData();
+    await openDocumentInbox();
   } catch(error){$('#loading').classList.add('hidden');showError(error);}
 }
 initSidebar();
