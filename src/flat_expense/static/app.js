@@ -7,6 +7,7 @@ let editing = null;
 let pendingRequest = null;
 let toastTimer;
 let inboxDocuments = [];
+const documentInboxSelections = new Map();
 const PAGE_SIZE = 15;
 const LOAN_CATEGORY_ID = '__loan__';
 const LOAN_PAYMENT_CATEGORY_ID = '__loan-payment__';
@@ -666,19 +667,52 @@ function documentQuickRow(item) {
   const source=item.source==='forwarded'?'переслано из Telegram':item.source==='telegram'?'Telegram':'веб';
   return `<li class="document-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(source)} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div><div class="document-actions"><button type="button" class="text-button" data-action="open-document" data-id="${item.id}">${item.previewable?'Открыть':'Скачать'}</button></div></li>`;
 }
-function documentTargetOptions() {
-  const plans=state.plans.filter(item=>!item.archived).map(item=>`<option value="plan:${item.id}">План · ${esc(item.title)} · ${esc(monthLabel(item.due_month))} · ${esc(item.category)}</option>`);
-  const expenses=state.expenses.filter(item=>!item.deleted).map(item=>`<option value="expense:${item.id}">Оплата · ${esc(item.description)} · ${esc(dateLabel(item.paid_on))} · ${esc(item.category)}</option>`);
-  return '<option value="">Выберите план или оплату</option>'+plans.join('')+expenses.join('');
+function documentTargetOptions(filters={}) {
+  const category=filters.category2||filters.category1;
+  const plans=state.plans.filter(item=>!item.archived&&categoryMatches(item,category)).map(item=>`<option value="plan:${item.id}">${esc(`План · ${item.title} · ${monthLabel(item.due_month)} · ${item.category}`)}</option>`);
+  const expenses=state.expenses.filter(item=>!item.deleted&&categoryMatches(item,category)).map(item=>`<option value="expense:${item.id}">${esc(`Оплата · ${item.description} · ${dateLabel(item.paid_on)} · ${item.category}`)}</option>`);
+  return `<option value="">${plans.length||expenses.length?'Выберите план или оплату':'Нет статей в этой категории'}</option>`+plans.join('')+expenses.join('');
+}
+function documentInboxSubcategories(category1) {
+  return '<option value="">Все подкатегории</option>'+state.categories.filter(item=>item.parent_id===category1).map(item=>`<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
+}
+function documentInboxControls(item) {
+  const filters=documentInboxSelections.get(item.id)||{category1:'',category2:'',target:''};
+  const filename=esc(item.filename), identifier=esc(item.id);
+  return `<div class="document-inbox-controls"><button type="button" class="text-button" data-action="open-document" data-id="${identifier}">${item.previewable?'Открыть':'Скачать'}</button><div class="document-inbox-fields"><div class="document-inbox-filters"><select data-document-filter="category1" data-id="${identifier}" aria-label="Категория для ${filename}"><option value="">Все категории</option>${state.categories.filter(category=>!category.parent_id).map(category=>`<option value="${esc(category.id)}" ${category.id===filters.category1?'selected':''}>${esc(category.name)}</option>`).join('')}</select><select data-document-filter="category2" data-id="${identifier}" aria-label="Подкатегория для ${filename}" ${filters.category1?'':'disabled'}>${documentInboxSubcategories(filters.category1)}</select></div><select id="document-target-${identifier}" data-document-target="${identifier}" aria-label="Статья для ${filename}">${documentTargetOptions(filters)}</select></div><button type="button" class="button primary" data-action="attach-inbox-document" data-id="${identifier}">Прикрепить</button></div>`;
+}
+function updateDocumentInboxSelection(input) {
+  const identifier=input.dataset.id||input.dataset.documentTarget;
+  const filters=documentInboxSelections.get(identifier)||{category1:'',category2:'',target:''};
+  if(input.dataset.documentTarget){filters.target=input.value;documentInboxSelections.set(identifier,filters);return;}
+  if(input.dataset.documentFilter==='category1'){
+    filters.category1=input.value;
+    filters.category2='';
+    const subcategory=$(`[data-document-filter="category2"][data-id="${identifier}"]`);
+    subcategory.innerHTML=documentInboxSubcategories(filters.category1);
+    subcategory.disabled=!filters.category1;
+  } else filters.category2=input.value;
+  const target=$(`#document-target-${identifier}`);
+  target.innerHTML=documentTargetOptions(filters);
+  if([...target.options].some(option=>option.value===filters.target))target.value=filters.target;
+  else filters.target='';
+  documentInboxSelections.set(identifier,filters);
 }
 function renderDocumentInbox() {
   const dialog=$('#document-inbox-dialog'), panel=$('#document-inbox-content');
   if (!inboxDocuments.length) { dialog.close(); return; }
-  panel.innerHTML=`<div class="document-dialog-body"><p class="muted">Файлы не попадут в учёт, пока вы не выберете план или оплату. Комментарий из Telegram показан под именем файла.</p><ul class="document-list document-inbox-list">${inboxDocuments.map(item=>`<li class="document-inbox-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(item.source==='forwarded'?'переслано из Telegram':'Telegram')} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div><div class="document-inbox-controls"><button type="button" class="text-button" data-action="open-document" data-id="${item.id}">${item.previewable?'Открыть':'Скачать'}</button><select id="document-target-${item.id}" aria-label="Статья для ${esc(item.filename)}">${documentTargetOptions()}</select><button type="button" class="button primary" data-action="attach-inbox-document" data-id="${item.id}">Прикрепить</button></div></li>`).join('')}</ul><div class="form-actions"><button type="button" class="button secondary" data-action="close-document-inbox">Разобрать позже</button></div></div>`;
+  panel.innerHTML=`<div class="document-dialog-body"><p class="muted">Файлы не попадут в учёт, пока вы не выберете план или оплату. Комментарий из Telegram показан под именем файла.</p><ul class="document-list document-inbox-list">${inboxDocuments.map(item=>`<li class="document-inbox-row"><div class="document-info"><strong>${esc(item.filename)}</strong><small>${esc(item.source==='forwarded'?'переслано из Telegram':'Telegram')} · ${fileSize(item.size_bytes)}${item.note?' · '+esc(item.note):''}</small></div>${documentInboxControls(item)}</li>`).join('')}</ul><div class="form-actions"><button type="button" class="button secondary" data-action="close-document-inbox">Разобрать позже</button></div></div>`;
+  documentInboxSelections.forEach((filters,identifier)=>{
+    const subcategory=$(`[data-document-filter="category2"][data-id="${identifier}"]`);
+    if(subcategory)subcategory.value=filters.category2;
+    const target=$(`#document-target-${identifier}`);
+    if(target)target.value=filters.target;
+  });
   if (!dialog.open) dialog.showModal();
 }
 async function openDocumentInbox() {
   inboxDocuments=await request('/v1/documents/inbox');
+  documentInboxSelections.clear();
   if (inboxDocuments.length) renderDocumentInbox();
 }
 async function attachInboxDocument(identifier) {
@@ -687,6 +721,7 @@ async function attachInboxDocument(identifier) {
   const [targetType,targetId]=selected.split(':',2);
   await mutation(`/v1/documents/${identifier}/attach?`+new URLSearchParams({target_type:targetType,target_id:targetId}),'PUT',{});
   inboxDocuments=inboxDocuments.filter(item=>item.id!==identifier);
+  documentInboxSelections.delete(identifier);
   await loadData();
   renderDocumentInbox();
   notify('Документ прикреплён');
@@ -1048,6 +1083,10 @@ document.addEventListener('scroll',hideChartTooltip,true);
 document.addEventListener('submit',event=>{if(event.target.id==='record-form')saveForm(event);});
 document.addEventListener('input',event=>{if(event.target.type==='search')updateFilter(event);});
 document.addEventListener('change',async event=>{
+  if(event.target.matches('[data-document-filter],[data-document-target]')){
+    updateDocumentInboxSelection(event.target);
+    return;
+  }
   if(event.target.matches('[data-page-select]')){
     state[event.target.dataset.kind+'Page']=Number(event.target.value);
     render();
