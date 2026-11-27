@@ -118,6 +118,64 @@ def test_plan_can_be_finalized_without_another_payment(client, headers, category
     assert result.json()["remaining_amount"] == "0.00"
 
 
+@pytest.mark.parametrize("amount", ["0", "100000", "250000"])
+def test_reopen_finalized_plan_restores_payment_and_forecast(client, headers, category, amount):
+    plan = make_plan(client, headers, category)
+    if amount != "0":
+        plan = post(client, headers, f"/v1/plans/{plan['id']}/payment", "initial-payment", {
+            "amount": amount, "paid_on": "2027-05-15", "version": plan["version"],
+            "finalize": True,
+        }).json()
+    else:
+        plan = post(client, headers, f"/v1/plans/{plan['id']}/finalize", "close", {
+            "version": plan["version"],
+        }).json()
+    stale = post(client, headers, f"/v1/plans/{plan['id']}/reopen", "stale", {
+        "version": plan["version"] - 1,
+    })
+    assert stale.status_code == 409
+    reopened = post(client, headers, f"/v1/plans/{plan['id']}/reopen", "reopen", {
+        "version": plan["version"],
+    })
+    assert reopened.status_code == 200, reopened.text
+    reopened = reopened.json()
+    assert reopened["payment_status"] == ("planned" if amount == "0" else "partial")
+    assert reopened["paid_amount"] == f"{int(amount):.2f}"
+    assert reopened["paid_on"] == plan["paid_on"]
+    assert reopened["remaining_amount"] == f"{250000 - int(amount):.2f}"
+    assert report(client, headers)["months"][1]["planned_remaining"] == reopened["remaining_amount"]
+    payment = post(client, headers, f"/v1/plans/{plan['id']}/payment", "extra-payment", {
+        "amount": "1000", "paid_on": "2027-06-01", "version": reopened["version"],
+    })
+    assert payment.status_code == 200, payment.text
+    assert payment.json()["paid_amount"] == f"{int(amount) + 1000:.2f}"
+
+
+def test_reopened_plan_accepts_reviewed_expense_with_document(client, headers, category, sessions):
+    plan = make_plan(client, headers, category)
+    closed = post(client, headers, f"/v1/plans/{plan['id']}/finalize", "close", {
+        "version": plan["version"],
+    }).json()
+    reopened = post(client, headers, f"/v1/plans/{plan['id']}/reopen", "reopen", {
+        "version": closed["version"],
+    }).json()
+    data = ExpenseIn(description="Оплата", category_id=category["id"], amount="1000", paid_on="2027-05-15")
+    with sessions() as db, db.begin():
+        expense = s.add_expense(db, 111, data, needs_review=True)
+    document = client.post(
+        f"/v1/expenses/{expense['id']}/documents", params={"filename": "receipt.pdf"},
+        content=b"%PDF-1.4\nreceipt", headers={**headers, "Idempotency-Key": "doc", "Content-Type": "application/pdf"},
+    )
+    assert document.status_code == 200, document.text
+    result = post(client, headers, f"/v1/expenses/{expense['id']}/apply-to-plan", "apply", {
+        "plan_id": plan["id"], "expense_version": expense["version"], "plan_version": reopened["version"],
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()["paid_amount"] == "1000.00"
+    documents = client.get(f"/v1/plans/{plan['id']}/documents", headers=headers).json()
+    assert [item["id"] for item in documents] == [document.json()["id"]]
+
+
 def test_reviewed_bot_expense_can_be_consumed_into_plan(client, headers, category, sessions):
     plan = make_plan(client, headers, category, expected="250000", note="Договорённость")
     data = ExpenseIn(

@@ -676,6 +676,23 @@ def finalize_plan(db: Session, owner: int, identifier: str, version: int):
     return result
 
 
+def reopen_plan(db: Session, owner: int, identifier: str, version: int):
+    item = owned(db, Plan, owner, identifier, lock=True)
+    if item.version != version:
+        raise DomainError("План уже изменён. Откройте его заново.", 409)
+    if item.archived:
+        raise DomainError("Сначала восстановите план из архива.", 409)
+    if item.payment_status != "finalized":
+        raise DomainError("Повторно открыть можно только финализированный план.", 409)
+    before = plan_view(db, item)
+    item.payment_status = "partial" if item.paid_amount_minor else "planned"
+    item.version += 1
+    db.flush()
+    result = plan_view(db, item)
+    audit(db, owner, "plan", item.id, "reopen", before, result)
+    return result
+
+
 def apply_expense_to_plan(
     db: Session,
     owner: int,
