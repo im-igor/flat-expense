@@ -172,7 +172,7 @@ def test_reopened_plan_accepts_reviewed_expense_with_document(client, headers, c
     })
     assert result.status_code == 200, result.text
     assert result.json()["paid_amount"] == "1000.00"
-    assert result.json()["title"] == "Двери · Оплата"
+    assert result.json()["title"] == "Двери · включает 1000 Оплата"
     documents = client.get(f"/v1/plans/{plan['id']}/documents", headers=headers).json()
     assert [item["id"] for item in documents] == [document.json()["id"]]
 
@@ -205,11 +205,46 @@ def test_reviewed_bot_expense_can_be_consumed_into_plan(client, headers, categor
     assert saved["paid_amount"] == "100000.00"
     assert saved["paid_on"] == "2027-05-15"
     assert saved["payment_status"] == "partial"
-    assert saved["title"] == "Двери · Первый платёж"
+    assert saved["title"] == "Двери · включает 100000 Первый платёж"
     assert saved["note"] == "Договорённость\n\nСчёт № 15"
     assert client.get("/v1/expenses", headers=headers).json() == []
     assert client.get(f"/v1/expenses/{expense['id']}", headers=headers).status_code == 404
     assert report(client, headers)["months"][0]["actual"] == "100000.00"
+
+
+def test_consuming_expense_adds_amount_to_existing_plan_payment(client, headers, category, sessions):
+    plan = make_plan(client, headers, category)
+    plan = post(
+        client,
+        headers,
+        f"/v1/plans/{plan['id']}/payment",
+        "existing-payment",
+        {"amount": "2000", "paid_on": "2027-05-10", "version": plan["version"]},
+    ).json()
+    data = ExpenseIn(
+        description="Первый платёж",
+        category_id=category["id"],
+        amount="3500",
+        paid_on="2027-05-15",
+    )
+    with sessions() as db, db.begin():
+        expense = s.add_expense(db, 111, data, needs_review=True)
+
+    result = post(
+        client,
+        headers,
+        f"/v1/expenses/{expense['id']}/apply-to-plan",
+        "add-to-existing-payment",
+        {
+            "plan_id": plan["id"],
+            "expense_version": expense["version"],
+            "plan_version": plan["version"],
+        },
+    )
+
+    assert result.status_code == 200, result.text
+    assert result.json()["paid_amount"] == "5500.00"
+    assert result.json()["title"] == "Двери · включает 3500 Первый платёж"
 
 
 def test_consuming_expense_rejects_description_longer_than_plan_limit(

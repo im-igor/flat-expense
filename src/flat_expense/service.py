@@ -715,7 +715,8 @@ def apply_expense_to_plan(
     if plan.payment_status in ("paid", "finalized"):
         raise DomainError("Этот план уже закрыт.", 409)
 
-    merged_title = f"{plan.title} · {expense.description}"
+    included_amount = money(expense.amount_minor).removesuffix(".00")
+    merged_title = f"{plan.title} · включает {included_amount} {expense.description}"
     if len(merged_title) > 500:
         raise DomainError("После объединения описание плана будет длиннее 500 символов.")
     merged_note = plan.note
