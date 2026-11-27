@@ -715,6 +715,9 @@ def apply_expense_to_plan(
     if plan.payment_status in ("paid", "finalized"):
         raise DomainError("Этот план уже закрыт.", 409)
 
+    merged_title = f"{plan.title} · {expense.description}"
+    if len(merged_title) > 500:
+        raise DomainError("После объединения описание плана будет длиннее 500 символов.")
     merged_note = plan.note
     if expense.note:
         merged_note = f"{plan.note}\n\n{expense.note}" if plan.note else expense.note
@@ -723,6 +726,7 @@ def apply_expense_to_plan(
 
     plan_before = plan_view(db, plan)
     expense_before = expense_view(db, expense)
+    plan.title = merged_title
     plan.paid_amount_minor += expense.amount_minor
     plan.paid_on = max((value for value in (plan.paid_on, expense.paid_on) if value), default=None)
     plan.note = merged_note
